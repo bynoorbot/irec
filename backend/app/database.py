@@ -482,8 +482,10 @@ async def replace_recommendations(
         # Delete existing recommendations for this video
         client.table("recommendations").delete().eq("video_id", video_id).execute()
 
-        # Optionally update video metadata if provided
-        update_record = {}
+        # Update video metadata and bump extracted_at freshness marker
+        update_record: dict[str, str | None] = {
+            "extracted_at": datetime.now(timezone.utc).isoformat(),
+        }
         if video_summary is not None:
             update_record["video_summary"] = video_summary
         if title is not None:
@@ -491,8 +493,7 @@ async def replace_recommendations(
         if duration is not None:
             update_record["duration"] = duration
 
-        if update_record:
-            client.table("videos").update(update_record).eq("video_id", video_id).execute()
+        client.table("videos").update(update_record).eq("video_id", video_id).execute()
 
         # Insert new recommendations
         if recommendations:
@@ -519,6 +520,9 @@ async def replace_recommendations(
                     client.table("recommendations").insert(records).execute()
                 else:
                     raise
+
+        # Explicitly invalidate cached analysis rows
+        await invalidate_analysis_cache()
     except Exception as e:
         logger.error(f"Database error during replace_recommendations: {type(e).__name__}: {e}")
         raise HTTPException(
@@ -564,6 +568,8 @@ async def insert_recommendations(
                 client.table("recommendations").insert(records).execute()
             else:
                 raise
+
+        await invalidate_analysis_cache()
     except HTTPException:
         raise
     except Exception as e:
@@ -636,12 +642,14 @@ async def persist_extraction(
                 record["duration"] = duration
 
             if existing.data:
-                # Video exists (from transcript cache) — update it
+                # Video exists (from transcript cache) - update it
                 v_id = existing.data[0]["video_id"]
-                client.table("videos").update(record).eq("video_id", v_id).execute()
+                update_payload = dict(record)
+                update_payload["extracted_at"] = datetime.now(timezone.utc).isoformat()
+                client.table("videos").update(update_payload).eq("video_id", v_id).execute()
                 return v_id
             else:
-                # New video — insert
+                # New video - insert
                 response = client.table("videos").insert(record).execute()
                 if not response.data:
                     raise HTTPException(status_code=500, detail="Database error: video insert returned no data")
@@ -658,7 +666,7 @@ async def persist_extraction(
     try:
         await insert_recommendations(video_id, recommendations)
     except HTTPException as e:
-        # Recommendations failed — rollback the video (cascades to any partial recs)
+        # Recommendations failed - rollback the video (cascades to any partial recs)
         await _rollback_video(video_id)
         raise HTTPException(
             status_code=e.status_code,
@@ -670,6 +678,9 @@ async def persist_extraction(
             status_code=500,
             detail=f"Recommendations failed: {type(e).__name__}: {e}",
         )
+
+    # Step 4: Invalidate cached analysis
+    await invalidate_analysis_cache()
 
     return {
         "channel_id": channel_id,
@@ -728,3 +739,22 @@ async def get_latest_extraction_time() -> str | None:
     except Exception as e:
         logger.warning(f"Failed to get latest extraction time: {e}")
         return None
+
+
+async def invalidate_analysis_cache() -> None:
+    """Explicitly delete stale analysis cache entries (today plays and radar plays).
+
+    Errors are caught and logged as warnings so that database write operations
+    are never blocked if cache invalidation fails.
+    """
+    try:
+        client = _get_client()
+        for prefix in ("aura_today_plays_%", "radar_plays_data_%"):
+            try:
+                client.table("api_cache").delete().like("cache_key", prefix).execute()
+            except Exception as prefix_err:
+                logger.warning(f"Failed to delete api_cache for pattern '{prefix}': {prefix_err}")
+        logger.info("Invalidated analysis cache rows")
+    except Exception as e:
+        logger.warning(f"Failed to invalidate analysis cache: {e}")
+

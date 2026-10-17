@@ -6,12 +6,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 from fastapi import HTTPException
 
+from datetime import datetime
+
 from app.database import (
     _rollback_video,
     check_duplicate,
     insert_recommendations,
     insert_video,
+    invalidate_analysis_cache,
     persist_extraction,
+    replace_recommendations,
     upsert_channel,
 )
 from app.schemas import Recommendation
@@ -67,7 +71,7 @@ def sample_recommendations():
 async def test_check_duplicate_returns_true_when_exists(mock_client):
     """Duplicate check returns True when video exists."""
     mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
-        data=[{"video_id": str(uuid.uuid4())}]
+        data=[{"video_id": str(uuid.uuid4()), "recommendations": [{"ticker": "AAPL"}]}]
     )
     result = await check_duplicate("abc123xyz99")
     assert result is True
@@ -235,7 +239,7 @@ async def test_insert_recommendations_inserts_batch(mock_client, sample_recommen
         data=[{}]
     )
     await insert_recommendations(video_id, sample_recommendations)
-    mock_client.table.assert_called_with("recommendations")
+    mock_client.table.assert_any_call("recommendations")
     insert_call = mock_client.table.return_value.insert.call_args[0][0]
     assert len(insert_call) == 2
     assert insert_call[0]["ticker"] == "AAPL"
@@ -277,7 +281,10 @@ async def test_persist_extraction_full_flow(mock_client, sample_recommendations)
     mock_client.table.return_value.upsert.return_value.execute.return_value = MagicMock(
         data=[{"channel_id": channel_id}]
     )
-    # Mock insert_video
+    # Mock video existence check (new video) and insert_video
+    mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
     mock_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
         data=[{"video_id": video_id}]
     )
@@ -302,6 +309,9 @@ async def test_persist_extraction_empty_recommendations(mock_client):
     mock_client.table.return_value.upsert.return_value.execute.return_value = MagicMock(
         data=[{"channel_id": channel_id}]
     )
+    mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
     mock_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
         data=[{"video_id": video_id}]
     )
@@ -325,6 +335,9 @@ async def test_persist_extraction_rollback_on_recommendations_failure(mock_clien
 
     mock_client.table.return_value.upsert.return_value.execute.return_value = MagicMock(
         data=[{"channel_id": channel_id}]
+    )
+    mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[]
     )
 
     # Track calls to distinguish insert_video from insert_recommendations
@@ -381,3 +394,160 @@ def test_get_client_raises_500_without_env_vars():
     with pytest.raises(HTTPException) as exc_info:
         db_module._get_client()
     assert exc_info.value.status_code == 500
+
+
+# --- extracted_at freshness and cache invalidation tests ---
+
+
+@pytest.mark.asyncio
+async def test_replace_recommendations_bumps_extracted_at_and_invalidates_cache(
+    mock_client, sample_recommendations
+):
+    """replace_recommendations updates videos.extracted_at and deletes stale api_cache entries."""
+    video_id = str(uuid.uuid4())
+    mock_client.table.return_value.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_client.table.return_value.delete.return_value.like.return_value.execute.return_value = MagicMock()
+    mock_client.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"video_id": video_id}]
+    )
+    mock_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
+        data=[{}]
+    )
+
+    await replace_recommendations(
+        video_id=video_id,
+        recommendations=sample_recommendations,
+        title="Updated Video Title",
+    )
+
+    # Verify videos table was updated with extracted_at and metadata
+    mock_client.table.assert_any_call("videos")
+    update_call = mock_client.table.return_value.update.call_args[0][0]
+    assert "extracted_at" in update_call
+    assert isinstance(update_call["extracted_at"], str)
+    assert datetime.fromisoformat(update_call["extracted_at"]) is not None
+    assert update_call["title"] == "Updated Video Title"
+
+    # Verify api_cache table was invalidated for both prefixes
+    mock_client.table.assert_any_call("api_cache")
+    like_calls = mock_client.table.return_value.delete.return_value.like.call_args_list
+    patterns_deleted = [call[0][1] for call in like_calls]
+    assert "aura_today_plays_%" in patterns_deleted
+    assert "radar_plays_data_%" in patterns_deleted
+
+
+@pytest.mark.asyncio
+async def test_persist_extraction_reingest_bumps_extracted_at_and_invalidates_cache(
+    mock_client, sample_recommendations
+):
+    """persist_extraction updates videos.extracted_at on re-ingest and invalidates api_cache."""
+    channel_id = str(uuid.uuid4())
+    existing_video_id = str(uuid.uuid4())
+
+    # Upsert channel succeeds
+    mock_client.table.return_value.upsert.return_value.execute.return_value = MagicMock(
+        data=[{"channel_id": channel_id}]
+    )
+    # Video exists (e.g. from transcript cache or re-ingest)
+    mock_client.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"video_id": existing_video_id}]
+    )
+    mock_client.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"video_id": existing_video_id}]
+    )
+    mock_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
+        data=[{}]
+    )
+    mock_client.table.return_value.delete.return_value.like.return_value.execute.return_value = MagicMock()
+
+    result = await persist_extraction(
+        channel_name="Financial Education",
+        youtube_video_id="reingest123",
+        video_url="https://www.youtube.com/watch?v=reingest123",
+        published_at="2024-01-15T10:30:00Z",
+        recommendations=sample_recommendations,
+        title="Refreshed Video Title",
+    )
+
+    assert result["video_id"] == existing_video_id
+
+    # Verify update payload on videos table contains extracted_at ISO timestamp
+    mock_client.table.assert_any_call("videos")
+    update_call = mock_client.table.return_value.update.call_args[0][0]
+    assert "extracted_at" in update_call
+    assert isinstance(update_call["extracted_at"], str)
+    assert datetime.fromisoformat(update_call["extracted_at"]) is not None
+    assert update_call["title"] == "Refreshed Video Title"
+
+    # Verify api_cache rows were deleted
+    mock_client.table.assert_any_call("api_cache")
+    like_calls = mock_client.table.return_value.delete.return_value.like.call_args_list
+    patterns_deleted = [call[0][1] for call in like_calls]
+    assert "aura_today_plays_%" in patterns_deleted
+    assert "radar_plays_data_%" in patterns_deleted
+
+
+@pytest.mark.asyncio
+async def test_insert_recommendations_invalidates_cache(
+    mock_client, sample_recommendations
+):
+    """insert_recommendations triggers analysis cache invalidation after successful insert."""
+    video_id = str(uuid.uuid4())
+    mock_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
+        data=[{}]
+    )
+    mock_client.table.return_value.delete.return_value.like.return_value.execute.return_value = MagicMock()
+
+    await insert_recommendations(video_id, sample_recommendations)
+
+    mock_client.table.assert_any_call("api_cache")
+    like_calls = mock_client.table.return_value.delete.return_value.like.call_args_list
+    patterns_deleted = [call[0][1] for call in like_calls]
+    assert "aura_today_plays_%" in patterns_deleted
+    assert "radar_plays_data_%" in patterns_deleted
+
+
+@pytest.mark.asyncio
+async def test_invalidate_analysis_cache_deletes_both_prefixes(mock_client):
+    """invalidate_analysis_cache targets aura_today_plays_ and radar_plays_data_ patterns."""
+    mock_client.table.return_value.delete.return_value.like.return_value.execute.return_value = MagicMock()
+
+    await invalidate_analysis_cache()
+
+    mock_client.table.assert_called_with("api_cache")
+    like_calls = mock_client.table.return_value.delete.return_value.like.call_args_list
+    patterns = [call[0][1] for call in like_calls]
+    assert patterns == ["aura_today_plays_%", "radar_plays_data_%"]
+
+
+@pytest.mark.asyncio
+async def test_invalidate_analysis_cache_tolerates_errors(mock_client):
+    """invalidate_analysis_cache logs warning and does not raise on database error."""
+    mock_client.table.return_value.delete.return_value.like.return_value.execute.side_effect = Exception(
+        "Supabase network timeout"
+    )
+
+    # Should not raise any exception
+    await invalidate_analysis_cache()
+
+
+@pytest.mark.asyncio
+async def test_replace_recommendations_succeeds_even_if_cache_invalidation_fails(
+    mock_client, sample_recommendations
+):
+    """replace_recommendations still succeeds when cache invalidation fails."""
+    video_id = str(uuid.uuid4())
+    mock_client.table.return_value.delete.return_value.eq.return_value.execute.return_value = MagicMock()
+    mock_client.table.return_value.update.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=[{"video_id": video_id}]
+    )
+    mock_client.table.return_value.insert.return_value.execute.return_value = MagicMock(
+        data=[{}]
+    )
+    mock_client.table.return_value.delete.return_value.like.return_value.execute.side_effect = Exception(
+        "Cache delete timeout"
+    )
+
+    await replace_recommendations(video_id=video_id, recommendations=sample_recommendations)
+    mock_client.table.assert_any_call("videos")
+

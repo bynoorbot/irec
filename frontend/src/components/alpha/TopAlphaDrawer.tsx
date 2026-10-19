@@ -112,16 +112,6 @@ export default function TopAlphaDrawer({ play, onClose }: TopAlphaDrawerProps) {
                 {/* Horizontal Axis */}
                 <div className="absolute inset-x-0 h-px bg-[#1E293B]" aria-hidden="true" />
 
-                {/* Target Price Tick (if avg_target_price exists) */}
-                {play.avg_target_price && (
-                  <div
-                    aria-hidden="true"
-                    title={`Avg Target: $${Math.round(play.avg_target_price)}`}
-                    style={{ left: '50%' }}
-                    className="absolute top-1 bottom-1 w-px bg-[#38BDF8]/40 border-r border-dashed border-[#38BDF8]/60 pointer-events-none"
-                  />
-                )}
-
                 {/* Catalyst Conviction Dots */}
                 {play.catalysts.map((cat, idx) => {
                   const conviction = Math.max(0, Math.min(100, Math.round(cat.conviction || 50)))
@@ -134,7 +124,8 @@ export default function TopAlphaDrawer({ play, onClose }: TopAlphaDrawerProps) {
                       title={`${cat.channel_name}: ${conviction}% conviction`}
                       onClick={() => {
                         const target = document.getElementById(`catalyst-quote-${idx}`)
-                        target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                        const shouldReduce = typeof window !== 'undefined' && window.matchMedia('(prefers-reduced-motion: reduce)').matches
+                        target?.scrollIntoView({ behavior: shouldReduce ? 'auto' : 'smooth', block: 'nearest' })
                       }}
                       style={{ left: `${conviction}%` }}
                       className={`absolute w-3 h-3 rounded-full -translate-x-1/2 focus-visible:ring-2 focus-visible:ring-[#00D4AA]/70 outline-none transition-transform hover:scale-125 cursor-pointer shadow-sm ${

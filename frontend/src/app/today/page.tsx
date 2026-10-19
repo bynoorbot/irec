@@ -478,7 +478,7 @@ export default function TodayPlaysPage() {
   const [streamIndex, setStreamIndex] = useState(0)
   const [sessionRestored, setSessionRestored] = useState(false)
   const [isDesktop, setIsDesktop] = useState(true)
-  const baseCount = isDesktop ? 18 : 8
+  const baseCount = isDesktop ? 18 : 6
   const [visibleCount, setVisibleCount] = useState(18)
   const headerRef = useRef<HTMLDivElement>(null)
 
@@ -493,12 +493,9 @@ export default function TodayPlaysPage() {
     return () => mq.removeEventListener('change', updateBreakpoint)
   }, [])
 
-  const [prevFilterKey, setPrevFilterKey] = useState(`${activeTab}-${tierFilter}-${sortBy}-${isDesktop}`)
-  const currentFilterKey = `${activeTab}-${tierFilter}-${sortBy}-${isDesktop}`
-  if (prevFilterKey !== currentFilterKey) {
-    setPrevFilterKey(currentFilterKey)
+  useEffect(() => {
     setVisibleCount(baseCount)
-  }
+  }, [activeTab, tierFilter, sortBy, baseCount])
 
 
   const handleMouseMove = (e: React.MouseEvent<HTMLElement>) => {

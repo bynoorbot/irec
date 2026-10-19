@@ -31,6 +31,7 @@ export default function TopAlphaRow({ play, onInspect }: TopAlphaRowProps) {
   return (
     <div
       role="button"
+      aria-label={`Inspect ${play.ticker} (${play.stock_name}): ${play.aura_score} Aura, ${play.agreement_pct}% agreement`}
       tabIndex={0}
       onClick={() => onInspect(play)}
       onKeyDown={(e) => {
@@ -124,81 +125,81 @@ export default function TopAlphaRow({ play, onInspect }: TopAlphaRowProps) {
       </div>
 
       {/* Right Block: Fully Visible Metrics & Action Arrow (Fully Responsive Grid on Mobile) */}
-      <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 shrink-0 font-[family-name:var(--font-geist-mono)] pt-2.5 md:pt-0 border-t md:border-t-0 border-[#1E293B]">
-        <div className="grid grid-cols-3 sm:flex sm:items-center gap-2.5 sm:gap-4 w-full sm:w-auto text-left sm:text-right">
-          {/* Metric 1: Agreement & Channels + B1 Consensus Stack */}
-          <div
-            className="flex flex-col sm:items-end"
-            aria-label={`${play.agreement_pct}% · ${play.analyst_count} ${play.analyst_count === 1 ? 'channel' : 'channels'}`}
-          >
-            <span className="text-xs sm:text-sm font-black text-[#00D4AA]">
-              {play.agreement_pct}%
-            </span>
-            <span className="text-[10px] text-[#8B95A8] truncate">
-              {play.analyst_count} {play.analyst_count === 1 ? 'channel' : 'channels'}
-            </span>
+      <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 shrink-0 font-[family-name:var(--font-geist-mono)] pt-2.5 md:pt-0 border-t md:border-t-0 border-[#1E293B] w-full sm:w-auto">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-2.5 sm:gap-4 w-full sm:w-auto text-left sm:text-right">
+          {/* 3-Column Metrics Grid on Mobile, Flex Row on sm+ */}
+          <div className="grid grid-cols-3 sm:flex sm:items-center gap-2.5 sm:gap-4 w-full sm:w-auto">
+            {/* Metric 1: Agreement & Channels */}
+            <div className="flex flex-col sm:items-end">
+              <span className="text-xs sm:text-sm font-black text-[#00D4AA]">
+                {play.agreement_pct}%
+              </span>
+              <span className="text-[10px] text-[#8B95A8] truncate">
+                {play.analyst_count} {play.analyst_count === 1 ? 'channel' : 'channels'}
+              </span>
+            </div>
 
-            {/* B1: Consensus Stack (channel initials + segmented agreement bar) */}
-            <div
-              aria-hidden="true"
-              className="flex items-center gap-1.5 mt-1 motion-safe:opacity-95"
-            >
-              {shownChannels.length > 0 && (
-                <div className="flex items-center -space-x-1.5">
-                  {shownChannels.map((ch, i) => (
-                    <span
-                      key={i}
-                      className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-[#141B2D] border border-[#1E293B] ring-2 ring-[#0A0F1A] text-[9px] sm:text-[10px] font-bold text-[#F1F5F9] flex items-center justify-center shrink-0"
-                      title={ch}
-                    >
-                      {ch.trim().charAt(0).toUpperCase()}
-                    </span>
-                  ))}
-                  {channelOverflow > 0 && (
-                    <span className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-[#1E293B] ring-2 ring-[#0A0F1A] text-[8px] sm:text-[9px] font-bold text-[#8B95A8] flex items-center justify-center shrink-0">
-                      +{channelOverflow}
-                    </span>
-                  )}
-                </div>
-              )}
+            {/* Metric 2: Target Price (RESTORED ON ALL MOBILE SCREENS) */}
+            <div className="flex flex-col sm:items-end pl-2 sm:pl-3 border-l border-[#1E293B]">
+              <span className="text-xs sm:text-sm font-black text-[#F1F5F9]">
+                {play.avg_target_price ? `$${Math.round(play.avg_target_price)}` : '—'}
+              </span>
+              <span className="text-[10px] text-[#38BDF8]">
+                Target
+              </span>
+            </div>
 
-              {/* Segmented Agreement Bar */}
-              <div className="flex items-center gap-0.5">
-                {Array.from({ length: totalSegments }).map((_, i) => (
-                  <span
-                    key={i}
-                    className={`h-3 w-1 rounded-full ${
-                      i < alignedCount ? 'bg-[#00D4AA]' : 'bg-[#334155]'
-                    }`}
-                  />
-                ))}
-                {segmentOverflow > 0 && (
-                  <span className="text-[8px] text-[#8B95A8] ml-0.5">
-                    +{segmentOverflow}
-                  </span>
-                )}
-              </div>
+            {/* Metric 3: Conviction (RESTORED ON ALL MOBILE SCREENS) */}
+            <div className="flex flex-col sm:items-end pl-2 sm:pl-3 border-l border-[#1E293B]">
+              <span className="text-xs sm:text-sm font-bold text-[#F1F5F9]">
+                {convictionVal}/100
+              </span>
+              <span className="text-[10px] text-[#8B95A8]">
+                Conviction
+              </span>
             </div>
           </div>
 
-          {/* Metric 2: Target Price (RESTORED ON ALL MOBILE SCREENS) */}
-          <div className="flex flex-col sm:items-end pl-2 sm:pl-3 border-l border-[#1E293B]">
-            <span className="text-xs sm:text-sm font-black text-[#F1F5F9]">
-              {play.avg_target_price ? `$${Math.round(play.avg_target_price)}` : '—'}
-            </span>
-            <span className="text-[10px] text-[#38BDF8]">
-              Target
-            </span>
-          </div>
+          {/* B1: Single Consensus Stack Element (Underneath on mobile with border-top, at the end on sm+) */}
+          <div
+            aria-hidden="true"
+            className="flex items-center justify-between sm:justify-start gap-1.5 sm:gap-2 pt-2 sm:pt-0 border-t sm:border-t-0 border-[#1E293B]/40 w-full sm:w-auto motion-safe:opacity-95"
+          >
+            {shownChannels.length > 0 && (
+              <div className="flex items-center -space-x-1.5">
+                {shownChannels.map((ch, i) => (
+                  <span
+                    key={i}
+                    className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-[#141B2D] border border-[#1E293B] ring-2 ring-[#0A0F1A] text-[9px] sm:text-[10px] font-bold text-[#F1F5F9] flex items-center justify-center shrink-0"
+                    title={ch}
+                  >
+                    {ch.trim().charAt(0).toUpperCase()}
+                  </span>
+                ))}
+                {channelOverflow > 0 && (
+                  <span className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-[#1E293B] ring-2 ring-[#0A0F1A] text-[8px] sm:text-[9px] font-bold text-[#8B95A8] flex items-center justify-center shrink-0">
+                    +{channelOverflow}
+                  </span>
+                )}
+              </div>
+            )}
 
-          {/* Metric 3: Conviction (RESTORED ON ALL MOBILE SCREENS) */}
-          <div className="flex flex-col sm:items-end pl-2 sm:pl-3 border-l border-[#1E293B]">
-            <span className="text-xs sm:text-sm font-bold text-[#F1F5F9]">
-              {convictionVal}/100
-            </span>
-            <span className="text-[10px] text-[#8B95A8]">
-              Conviction
-            </span>
+            {/* Segmented Agreement Bar */}
+            <div className="flex items-center gap-0.5">
+              {Array.from({ length: totalSegments }).map((_, i) => (
+                <span
+                  key={i}
+                  className={`h-3 w-1 rounded-full ${
+                    i < alignedCount ? 'bg-[#00D4AA]' : 'bg-[#334155]'
+                  }`}
+                />
+              ))}
+              {segmentOverflow > 0 && (
+                <span className="text-[8px] text-[#8B95A8] ml-0.5">
+                  +{segmentOverflow}
+                </span>
+              )}
+            </div>
           </div>
         </div>
 

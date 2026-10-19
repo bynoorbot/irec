@@ -208,6 +208,7 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
                 type="button"
                 key={`${item.ticker}-${idx}`}
                 aria-expanded={isSelected}
+                aria-haspopup="dialog"
                 onMouseEnter={(e) => handleMouseEnterItem(item, e)}
                 onMouseLeave={handleMouseLeaveItem}
                 onFocus={(e) => handleOpenPeek(item, e.currentTarget)}

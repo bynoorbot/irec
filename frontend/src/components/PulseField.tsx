@@ -28,15 +28,6 @@ export default function PulseField({
     const speed = isBull ? 0.012 : isBear ? 0.004 : 0.008
     const volatility = isBull ? 0.8 : isBear ? 0.3 : 0.5 // Higher peaks for bulls, flat for bears
     
-    const resize = () => {
-      canvas.width = canvas.offsetWidth * window.devicePixelRatio
-      canvas.height = canvas.offsetHeight * window.devicePixelRatio
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
-    }
-    
-    window.addEventListener('resize', resize)
-    resize()
-
     const prefersReducedMotion =
       typeof window !== 'undefined' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -96,7 +87,18 @@ export default function PulseField({
         animationFrameId = window.requestAnimationFrame(render)
       }
     }
-    
+
+    const resize = () => {
+      canvas.width = canvas.offsetWidth * window.devicePixelRatio
+      canvas.height = canvas.offsetHeight * window.devicePixelRatio
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio)
+      if (prefersReducedMotion) {
+        render()
+      }
+    }
+
+    window.addEventListener('resize', resize)
+    resize()
     render()
 
     return () => {

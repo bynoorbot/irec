@@ -69,6 +69,7 @@ export default function TopAlphaSection({
     <section
       ref={cardRef}
       id="top-buys-now"
+      style={{ scrollMarginTop: '5rem' }}
       className={`group relative rounded-3xl border border-[#1E293B] bg-[#141B2D]/55 backdrop-blur-md overflow-hidden mb-8 ${
         variant === 'compact' ? 'p-4 sm:p-5 md:p-6' : 'p-4 sm:p-6 md:p-8'
       } transition-all duration-500 shadow-2xl shadow-black/40 animate-fade-up`}
@@ -106,14 +107,14 @@ export default function TopAlphaSection({
         </div>
 
         {/* Institutional Conviction Gate Transparency Badge */}
-        <div className="flex items-center gap-2 shrink-0">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-[#00D4AA]/10 border border-[#00D4AA]/25 text-[11px] font-bold text-[#00D4AA] font-[family-name:var(--font-geist-mono)] shadow-[0_0_15px_rgba(0,212,170,0.1)]">
+        <div className="shrink-0 border border-dashed border-[#00D4AA]/25 rounded-lg px-2.5 py-1.5 bg-[#00D4AA]/5">
+          <div className="inline-flex items-center gap-1.5 text-[11px] font-bold text-[#00D4AA] font-[family-name:var(--font-geist-mono)]">
             <ShieldCheck className="w-3.5 h-3.5 text-[#00D4AA] shrink-0" />
             <span>
               {count} of {plays.length} cleared Gate
             </span>
           </div>
-          <span className="text-[10px] text-[#64748B] font-[family-name:var(--font-geist-mono)] hidden xl:inline">
+          <span className="block mt-1.5 text-[10px] text-[#8B95A8] font-[family-name:var(--font-geist-mono)]">
             (≥{ALPHA_GATE_CRITERIA.MIN_CHANNELS} channels, ≥{ALPHA_GATE_CRITERIA.MIN_AGREEMENT_PCT}% agreement, ≥{ALPHA_GATE_CRITERIA.MIN_AURA_SCORE} Aura)
           </span>
         </div>

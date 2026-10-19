@@ -78,22 +78,22 @@ export default function TopAlphaDrawer({ play, onClose }: TopAlphaDrawerProps) {
           {/* 3-Column Micro Metrics Grid */}
           <div className="grid grid-cols-3 gap-2 py-3.5 border-b border-[#1E293B] font-[family-name:var(--font-geist-mono)] text-center">
             <div className="p-2.5 rounded-xl bg-[#141B2D]/70 border border-white/5">
-              <span className="block text-[9px] uppercase tracking-wider text-[#64748B]">Aura Score</span>
+              <span className="block text-[9px] uppercase tracking-wider text-[#8B95A8]">Aura Score</span>
               <span className="text-base sm:text-lg font-black text-[#00D4AA]">{play.aura_score}/100</span>
             </div>
             <div className="p-2.5 rounded-xl bg-[#141B2D]/70 border border-white/5">
-              <span className="block text-[9px] uppercase tracking-wider text-[#64748B]">Agreement</span>
+              <span className="block text-[9px] uppercase tracking-wider text-[#8B95A8]">Agreement</span>
               <span className="text-base sm:text-lg font-black text-[#F1F5F9]">{play.agreement_pct}%</span>
             </div>
             <div className="p-2.5 rounded-xl bg-[#141B2D]/70 border border-white/5">
-              <span className="block text-[9px] uppercase tracking-wider text-[#64748B]">Channels</span>
+              <span className="block text-[9px] uppercase tracking-wider text-[#8B95A8]">Channels</span>
               <span className="text-base sm:text-lg font-black text-[#38BDF8]">{play.analyst_count}</span>
             </div>
           </div>
 
           {/* Executive Consensus Thesis */}
           <div className="py-3.5 border-b border-[#1E293B]">
-            <h4 className="text-[10px] font-black uppercase tracking-widest text-[#64748B] font-[family-name:var(--font-geist-mono)] mb-2">
+            <h4 className="text-[10px] font-black uppercase tracking-widest text-[#8B95A8] font-[family-name:var(--font-geist-mono)] mb-2">
               Executive Consensus Thesis
             </h4>
             <p className="text-xs sm:text-sm text-[#F1F5F9] leading-relaxed bg-[#141B2D]/40 p-3.5 rounded-xl border border-white/5 font-light">
@@ -101,9 +101,55 @@ export default function TopAlphaDrawer({ play, onClose }: TopAlphaDrawerProps) {
             </p>
           </div>
 
+          {/* B3: Conviction Corridor (spread inside drawer) */}
+          {play.catalysts && play.catalysts.length >= 2 && (
+            <div className="py-3.5 border-b border-[#1E293B]">
+              <div className="flex items-center justify-between text-[10px] font-[family-name:var(--font-geist-mono)] text-[#8B95A8] mb-1.5">
+                <span className="uppercase font-bold tracking-wider">Conviction Corridor</span>
+                <span>0 — 100</span>
+              </div>
+              <div className="relative h-10 flex items-center">
+                {/* Horizontal Axis */}
+                <div className="absolute inset-x-0 h-px bg-[#1E293B]" aria-hidden="true" />
+
+                {/* Target Price Tick (if avg_target_price exists) */}
+                {play.avg_target_price && (
+                  <div
+                    aria-hidden="true"
+                    title={`Avg Target: $${Math.round(play.avg_target_price)}`}
+                    style={{ left: '50%' }}
+                    className="absolute top-1 bottom-1 w-px bg-[#38BDF8]/40 border-r border-dashed border-[#38BDF8]/60 pointer-events-none"
+                  />
+                )}
+
+                {/* Catalyst Conviction Dots */}
+                {play.catalysts.map((cat, idx) => {
+                  const conviction = Math.max(0, Math.min(100, Math.round(cat.conviction || 50)))
+                  const isDissenting = cat.sentiment < 0
+                  return (
+                    <button
+                      key={idx}
+                      type="button"
+                      aria-label={`${cat.channel_name}, conviction ${conviction}`}
+                      title={`${cat.channel_name}: ${conviction}% conviction`}
+                      onClick={() => {
+                        const target = document.getElementById(`catalyst-quote-${idx}`)
+                        target?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+                      }}
+                      style={{ left: `${conviction}%` }}
+                      className={`absolute w-3 h-3 rounded-full -translate-x-1/2 focus-visible:ring-2 focus-visible:ring-[#00D4AA]/70 outline-none transition-transform hover:scale-125 cursor-pointer shadow-sm ${
+                        isDissenting ? 'bg-[#FF4D6A]' : 'bg-[#00D4AA]'
+                      }`}
+                    />
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Individual Analyst Catalysts & Quotes */}
           <div className="py-3.5 space-y-3">
-            <h4 className="text-[10px] font-black uppercase tracking-widest text-[#64748B] font-[family-name:var(--font-geist-mono)]">
+            <h4 className="text-[10px] font-black uppercase tracking-widest text-[#8B95A8] font-[family-name:var(--font-geist-mono)]">
               Analyst Catalysts &amp; Transcripts ({play.catalysts?.length || 0})
             </h4>
 
@@ -112,11 +158,12 @@ export default function TopAlphaDrawer({ play, onClose }: TopAlphaDrawerProps) {
                 play.catalysts.map((cat, idx) => (
                   <div
                     key={idx}
-                    className="p-3 rounded-xl bg-[#141B2D]/50 border border-white/5 text-xs space-y-2"
+                    id={`catalyst-quote-${idx}`}
+                    className="p-3 rounded-xl bg-[#141B2D]/50 border border-white/5 text-xs space-y-2 scroll-mt-4"
                   >
                     <div className="flex items-center justify-between text-[11px] font-[family-name:var(--font-geist-mono)]">
                       <span className="font-bold text-[#00D4AA]">{cat.channel_name}</span>
-                      <span className="text-[#64748B]">{cat.published_at ? formatRelativeTime(cat.published_at) : ''}</span>
+                      <span className="text-[#8B95A8]">{cat.published_at ? formatRelativeTime(cat.published_at) : ''}</span>
                     </div>
                     <p className="text-[#CBD5E1] leading-relaxed italic">
                       &ldquo;{cat.notes}&rdquo;
@@ -133,7 +180,7 @@ export default function TopAlphaDrawer({ play, onClose }: TopAlphaDrawerProps) {
                   </div>
                 ))
               ) : (
-                <p className="text-xs text-[#64748B]">No individual transcript quotes recorded for this ticker.</p>
+                <p className="text-xs text-[#8B95A8]">No individual transcript quotes recorded for this ticker.</p>
               )}
             </div>
           </div>

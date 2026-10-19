@@ -477,7 +477,15 @@ export default function TodayPlaysPage() {
   const [showExplainer, setShowExplainer] = useState(false)
   const [streamIndex, setStreamIndex] = useState(0)
   const [sessionRestored, setSessionRestored] = useState(false)
+  const [visibleCount, setVisibleCount] = useState(18)
   const headerRef = useRef<HTMLDivElement>(null)
+  const [prevFilterKey, setPrevFilterKey] = useState(`${activeTab}-${tierFilter}-${sortBy}`)
+  const currentFilterKey = `${activeTab}-${tierFilter}-${sortBy}`
+  if (prevFilterKey !== currentFilterKey) {
+    setPrevFilterKey(currentFilterKey)
+    setVisibleCount(18)
+  }
+
 
   const handleMouseMove = (e: React.MouseEvent<HTMLElement>) => {
     const el = headerRef.current
@@ -679,7 +687,7 @@ export default function TodayPlaysPage() {
   )
 
   return (
-    <main className="flex-1 w-full mx-auto relative min-h-screen pb-40 md:pb-8">
+    <main id="main" tabIndex={-1} className="flex-1 w-full mx-auto relative min-h-screen pb-[10rem] md:pb-8 overflow-x-clip outline-none">
       {/* Premium SVG Noise Texture Overlay */}
       <div
         className="fixed inset-0 pointer-events-none z-50 opacity-[0.015] mix-blend-overlay"
@@ -732,9 +740,9 @@ export default function TodayPlaysPage() {
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <Activity className={`w-3.5 h-3.5 ${activeColorText} animate-pulse`} />
-                    <h1 className="text-[10px] font-black uppercase tracking-[0.3em] text-[#64748B] font-[family-name:var(--font-geist-mono)]">
+                    <p className="text-[10px] font-black uppercase tracking-[0.3em] text-[#8B95A8] font-[family-name:var(--font-geist-mono)]">
                       Market Pulse
-                    </h1>
+                    </p>
                   </div>
                 </div>
 
@@ -755,9 +763,9 @@ export default function TodayPlaysPage() {
                 ) : (
                   <div className="mt-2.5">
                     <div className="flex items-center gap-3 flex-wrap">
-                      <span className={`text-4xl md:text-6xl font-black tracking-tighter ${moodConfig?.color} transition-all duration-1000 leading-none`}>
+                      <h1 className={`text-4xl md:text-6xl font-black tracking-tighter ${moodConfig?.color} transition-all duration-1000 leading-none`}>
                         {moodConfig?.title}
-                      </span>
+                      </h1>
                       <span className="text-xs md:text-sm text-[#64748B] font-bold font-[family-name:var(--font-geist-mono)] bg-[#0A0F1A]/80 border border-[#1E293B] px-3 py-1.5 md:px-4 md:py-2 rounded-xl">
                         {moodConfig?.scoreText}
                       </span>
@@ -1055,17 +1063,17 @@ export default function TodayPlaysPage() {
 
             {/* Signal Tier Filter Bar */}
             <div className="flex flex-wrap items-center justify-between gap-3 py-1 select-none font-[family-name:var(--font-geist-mono)]">
-              <div className="flex items-center gap-1.5 bg-[#0A0F1A]/90 border border-[#1E293B] rounded-xl p-1 text-xs">
-                <span className="text-[#64748B] px-2 font-bold text-[10px] uppercase tracking-wider hidden sm:inline">
+              <div className="flex flex-wrap items-center gap-1.5 min-w-0 max-w-full bg-[#0A0F1A]/90 border border-[#5B6E88] rounded-xl p-1 text-xs">
+                <span className="text-[#8B95A8] px-2 font-bold text-[10px] uppercase tracking-wider hidden sm:inline">
                   FILTER TIER:
                 </span>
                 <button
                   type="button"
                   onClick={() => { setTierFilter('all'); setStreamIndex(0); }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                  className={`shrink-0 px-2.5 py-1.5 text-[11px] sm:px-3 sm:text-xs rounded-lg font-bold transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
                     tierFilter === 'all'
                       ? `bg-[#141B2D] ${activeColorText} ring-1 ${activeRing} ${activeShadow}`
-                      : 'text-[#64748B] hover:text-[#F1F5F9]'
+                      : 'text-[#8B95A8] hover:text-[#F1F5F9]'
                   }`}
                 >
                   <span>All Signals</span>
@@ -1079,10 +1087,10 @@ export default function TodayPlaysPage() {
                 <button
                   type="button"
                   onClick={() => { setTierFilter('strong'); setStreamIndex(0); }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                  className={`shrink-0 px-2.5 py-1.5 text-[11px] sm:px-3 sm:text-xs rounded-lg font-bold transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
                     tierFilter === 'strong'
                       ? `bg-[#141B2D] ${activeColorText} ring-1 ${activeRing} ${activeShadow}`
-                      : 'text-[#64748B] hover:text-[#F1F5F9]'
+                      : 'text-[#8B95A8] hover:text-[#F1F5F9]'
                   }`}
                 >
                   <ShieldCheck className="w-3.5 h-3.5" />
@@ -1097,10 +1105,10 @@ export default function TodayPlaysPage() {
                 <button
                   type="button"
                   onClick={() => { setTierFilter('emerging'); setStreamIndex(0); }}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
+                  className={`shrink-0 px-2.5 py-1.5 text-[11px] sm:px-3 sm:text-xs rounded-lg font-bold transition-all duration-200 flex items-center gap-1.5 cursor-pointer ${
                     tierFilter === 'emerging'
                       ? `bg-[#141B2D] ${earlyColorText} ring-1 ${earlyRing} ${earlyShadow}`
-                      : `text-[#64748B] hover:${earlyColorText}`
+                      : `text-[#8B95A8] hover:${earlyColorText}`
                   }`}
                 >
                   <span className="relative flex h-2 w-2">
@@ -1199,7 +1207,7 @@ export default function TodayPlaysPage() {
                           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
                         >
                           <AnimatePresence mode="popLayout">
-                            {strongPlays.map((play, idx) => (
+                            {strongPlays.slice(0, visibleCount).map((play, idx) => (
                               <motion.div
                                 key={play.ticker}
                                 layout
@@ -1210,6 +1218,11 @@ export default function TodayPlaysPage() {
                                   type: 'spring',
                                   stiffness: 300,
                                   damping: 30
+                                }}
+                                style={{
+                                  contentVisibility: 'auto',
+                                  containIntrinsicSize: 'auto 420px',
+                                  scrollMarginBottom: '9rem'
                                 }}
                                 className="h-full"
                               >
@@ -1233,7 +1246,7 @@ export default function TodayPlaysPage() {
                           className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
                         >
                           <AnimatePresence mode="popLayout">
-                            {emergingPlays.map((play, idx) => (
+                            {emergingPlays.slice(0, visibleCount).map((play, idx) => (
                               <motion.div
                                 key={play.ticker}
                                 layout
@@ -1245,6 +1258,11 @@ export default function TodayPlaysPage() {
                                   stiffness: 300,
                                   damping: 30
                                 }}
+                                style={{
+                                  contentVisibility: 'auto',
+                                  containIntrinsicSize: 'auto 420px',
+                                  scrollMarginBottom: '9rem'
+                                }}
                                 className="h-full"
                               >
                                 <PlayCard play={play} index={idx} activeSortBy={sortBy} />
@@ -1254,6 +1272,34 @@ export default function TodayPlaysPage() {
                         </motion.div>
                       </div>
                     )}
+
+                    {/* Load More Button */}
+                    {(() => {
+                      const remaining =
+                        tierFilter === 'all'
+                          ? (strongPlays.length > visibleCount ? strongPlays.length - visibleCount : 0) +
+                            (emergingPlays.length > visibleCount ? emergingPlays.length - visibleCount : 0)
+                          : tierFilter === 'strong'
+                          ? (strongPlays.length > visibleCount ? strongPlays.length - visibleCount : 0)
+                          : (emergingPlays.length > visibleCount ? emergingPlays.length - visibleCount : 0)
+
+                      if (remaining <= 0) return null
+
+                      return (
+                        <div className="flex justify-center pt-8">
+                          <button
+                            type="button"
+                            onClick={() => setVisibleCount((c) => c + 18)}
+                            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-[#1E293B] bg-[#141B2D]/80 backdrop-blur-md text-sm font-medium text-[#8B95A8] hover:text-[#00D4AA] hover:border-[#00D4AA]/30 hover:bg-[#1E293B] transition-all duration-200 shadow-lg shadow-black/20 cursor-pointer"
+                          >
+                            <span>Load more</span>
+                            <span className="font-[family-name:var(--font-geist-mono)] text-[11px] text-[#8B95A8]">
+                              ({remaining} remaining)
+                            </span>
+                          </button>
+                        </div>
+                      )
+                    })()}
                   </div>
                 ) : (
                   /* Tier Empty State */
@@ -1345,7 +1391,7 @@ export default function TodayPlaysPage() {
 
       {/* 📱 MOBILE FLOATING DOCK 📱 */}
       {!loading && !error && data && (
-        <div className="md:hidden fixed bottom-16 left-4 right-4 z-30 bg-[#0A0F1A]/90 backdrop-blur-xl border border-[#1E293B] shadow-2xl rounded-2xl overflow-hidden select-none">
+        <div className="md:hidden fixed bottom-[calc(3.5rem+env(safe-area-inset-bottom,0px)+0.75rem)] left-4 right-4 z-30 bg-[#0A0F1A]/90 backdrop-blur-xl border border-[#5B6E88] shadow-2xl rounded-2xl overflow-hidden select-none">
 
           {/* Top row: Stream navigation — only visible in stream mode */}
           {viewMode === 'stream' && activePlays.length > 1 && (

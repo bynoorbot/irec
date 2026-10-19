@@ -333,12 +333,12 @@ export default function ExplorePage() {
   }
 
   return (
-    <main className="flex-1 flex flex-col relative w-full bg-[#0A0F1A] overflow-x-clip">
+    <main id="main" tabIndex={-1} className="flex-1 flex flex-col relative w-full bg-[#0A0F1A] overflow-x-clip outline-none">
       {/* Background Gradient */}
       <div className="fixed inset-0 pointer-events-none z-0 opacity-[0.015] mix-blend-overlay" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#141B2D]/40 via-[#0A0F1A] to-[#0A0F1A] pointer-events-none z-0" />
 
-      <div className={`relative z-10 mx-auto px-4 sm:px-8 py-8 md:py-12 w-full flex-1 flex flex-col animate-fade-up transition-all duration-300 ${quickPeekStock ? 'max-w-[1680px]' : 'max-w-[1400px]'}`}>
+      <div className={`relative z-10 mx-auto px-4 sm:px-8 py-8 md:py-12 w-full max-w-[1400px] flex-1 flex flex-col animate-fade-up transition-all duration-300 ${quickPeekStock ? 'lg:pr-[380px]' : ''}`}>
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center justify-between flex-wrap gap-4 mb-4">
@@ -361,9 +361,10 @@ export default function ExplorePage() {
               <input 
                 type="text"
                 placeholder="Search ticker or name..."
+                aria-label="Search ticker or name..."
                 value={search}
                 onChange={e => setSearch(e.target.value)}
-                className="w-full bg-[#141B2D]/50 border border-[#1E293B] rounded-xl pl-10 pr-4 py-2.5 text-sm text-[#F1F5F9] placeholder:text-[#475569] outline-none focus:border-[#00D4AA]/50 transition-colors font-[family-name:var(--font-geist-mono)]"
+                className="w-full bg-[#141B2D]/50 border border-[#5B6E88] rounded-xl pl-10 pr-4 py-2.5 text-sm text-[#F1F5F9] placeholder:text-[#8B95A8] outline-none focus:border-[#00D4AA]/50 transition-colors font-[family-name:var(--font-geist-mono)]"
               />
             </div>
 

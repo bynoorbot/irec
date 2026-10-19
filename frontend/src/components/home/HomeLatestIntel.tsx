@@ -207,6 +207,8 @@ export default function HomeLatestIntel() {
                         <img
                           src={drop.channel_thumbnail_url}
                           alt=""
+                          width={36}
+                          height={36}
                           className="w-9 h-9 rounded-xl object-cover border border-[#1E293B] group-hover:border-[#00D4AA]/40 transition-colors"
                         />
                       ) : (

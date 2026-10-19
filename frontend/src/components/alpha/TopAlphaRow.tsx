@@ -13,10 +13,33 @@ export default function TopAlphaRow({ play, onInspect }: TopAlphaRowProps) {
   const isTop1 = play.rank === 1
   const convictionVal = Math.round(normalizeAvgConviction100(play.avg_conviction))
 
+  // B4: Score Lamp math (12 segments)
+  const lampSegments = 12
+  const litLampCount = Math.round((play.aura_score / 100) * lampSegments)
+
+  // B1: Consensus Stack math & channel initials
+  const distinctChannels = Array.from(
+    new Set(play.catalysts?.map((c) => c.channel_name).filter(Boolean) || [])
+  )
+  const shownChannels = distinctChannels.slice(0, 4)
+  const channelOverflow = play.analyst_count - shownChannels.length
+
+  const totalSegments = Math.min(12, play.analyst_count)
+  const alignedCount = Math.round((play.agreement_pct / 100) * totalSegments)
+  const segmentOverflow = play.analyst_count > 12 ? play.analyst_count - 12 : 0
+
   return (
     <div
+      role="button"
+      tabIndex={0}
       onClick={() => onInspect(play)}
-      className={`group/row relative flex flex-col md:flex-row md:items-center justify-between gap-3.5 sm:gap-4 p-4 sm:p-5 rounded-2xl bg-[#0A0F1A]/75 border transition-all duration-300 cursor-pointer overflow-hidden ${
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onInspect(play)
+        }
+      }}
+      className={`group/row relative flex flex-col md:flex-row md:items-center justify-between gap-3.5 sm:gap-4 p-4 sm:p-5 rounded-2xl bg-[#0A0F1A]/75 border focus-visible:ring-2 focus-visible:ring-[#00D4AA]/70 outline-none transition-[border-color,background-color,color] duration-200 cursor-pointer overflow-hidden ${
         isTop1
           ? 'border-[#00D4AA]/45 shadow-[0_0_25px_rgba(0,212,170,0.14)] hover:border-[#00D4AA]/75 hover:shadow-[0_0_35px_rgba(0,212,170,0.22)]'
           : 'border-[#1E293B]/70 hover:border-[#00D4AA]/35 hover:bg-[#141B2D]/80'
@@ -29,7 +52,7 @@ export default function TopAlphaRow({ play, onInspect }: TopAlphaRowProps) {
         </div>
       )}
 
-      {/* Left Identity Block: Rank + Ticker + Aura + Archetype + Name */}
+      {/* Left Identity Block: Rank + Ticker + Aura + Archetype + Name + Score Lamp */}
       <div className="flex items-start sm:items-center gap-3 sm:gap-3.5 min-w-0 md:min-w-[240px] lg:min-w-[280px]">
         {/* Oversized Geist Mono Rank */}
         <span
@@ -72,6 +95,21 @@ export default function TopAlphaRow({ play, onInspect }: TopAlphaRowProps) {
             )}
           </div>
 
+          {/* B4: Score Lamp (12-segment pre-attentive indicator) */}
+          <div
+            aria-hidden="true"
+            className="grid grid-cols-12 gap-0.5 w-24 mt-1 motion-safe:opacity-90"
+          >
+            {Array.from({ length: lampSegments }).map((_, i) => (
+              <span
+                key={i}
+                className={`h-1.5 rounded-[1px] transition-colors duration-200 ${
+                  i < litLampCount ? 'bg-[#00D4AA]' : 'bg-[#1E293B]'
+                }`}
+              />
+            ))}
+          </div>
+
           <span className="text-xs text-[#8B95A8] font-medium truncate max-w-[220px] sm:max-w-[260px] mt-0.5">
             {play.stock_name}
           </span>
@@ -88,14 +126,59 @@ export default function TopAlphaRow({ play, onInspect }: TopAlphaRowProps) {
       {/* Right Block: Fully Visible Metrics & Action Arrow (Fully Responsive Grid on Mobile) */}
       <div className="flex items-center justify-between sm:justify-end gap-3 sm:gap-4 shrink-0 font-[family-name:var(--font-geist-mono)] pt-2.5 md:pt-0 border-t md:border-t-0 border-[#1E293B]">
         <div className="grid grid-cols-3 sm:flex sm:items-center gap-2.5 sm:gap-4 w-full sm:w-auto text-left sm:text-right">
-          {/* Metric 1: Agreement & Channels */}
-          <div className="flex flex-col sm:items-end">
+          {/* Metric 1: Agreement & Channels + B1 Consensus Stack */}
+          <div
+            className="flex flex-col sm:items-end"
+            aria-label={`${play.agreement_pct}% · ${play.analyst_count} ${play.analyst_count === 1 ? 'channel' : 'channels'}`}
+          >
             <span className="text-xs sm:text-sm font-black text-[#00D4AA]">
               {play.agreement_pct}%
             </span>
             <span className="text-[10px] text-[#8B95A8] truncate">
               {play.analyst_count} {play.analyst_count === 1 ? 'channel' : 'channels'}
             </span>
+
+            {/* B1: Consensus Stack (channel initials + segmented agreement bar) */}
+            <div
+              aria-hidden="true"
+              className="flex items-center gap-1.5 mt-1 motion-safe:opacity-95"
+            >
+              {shownChannels.length > 0 && (
+                <div className="flex items-center -space-x-1.5">
+                  {shownChannels.map((ch, i) => (
+                    <span
+                      key={i}
+                      className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-[#141B2D] border border-[#1E293B] ring-2 ring-[#0A0F1A] text-[9px] sm:text-[10px] font-bold text-[#F1F5F9] flex items-center justify-center shrink-0"
+                      title={ch}
+                    >
+                      {ch.trim().charAt(0).toUpperCase()}
+                    </span>
+                  ))}
+                  {channelOverflow > 0 && (
+                    <span className="w-5 h-5 sm:w-6 sm:h-6 rounded-full bg-[#1E293B] ring-2 ring-[#0A0F1A] text-[8px] sm:text-[9px] font-bold text-[#8B95A8] flex items-center justify-center shrink-0">
+                      +{channelOverflow}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {/* Segmented Agreement Bar */}
+              <div className="flex items-center gap-0.5">
+                {Array.from({ length: totalSegments }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`h-3 w-1 rounded-full ${
+                      i < alignedCount ? 'bg-[#00D4AA]' : 'bg-[#334155]'
+                    }`}
+                  />
+                ))}
+                {segmentOverflow > 0 && (
+                  <span className="text-[8px] text-[#8B95A8] ml-0.5">
+                    +{segmentOverflow}
+                  </span>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Metric 2: Target Price (RESTORED ON ALL MOBILE SCREENS) */}
@@ -113,7 +196,7 @@ export default function TopAlphaRow({ play, onInspect }: TopAlphaRowProps) {
             <span className="text-xs sm:text-sm font-bold text-[#F1F5F9]">
               {convictionVal}/100
             </span>
-            <span className="text-[10px] text-[#64748B]">
+            <span className="text-[10px] text-[#8B95A8]">
               Conviction
             </span>
           </div>
@@ -121,7 +204,7 @@ export default function TopAlphaRow({ play, onInspect }: TopAlphaRowProps) {
 
         {/* Chevron Action Button (Clean 44px hit-area affordance) */}
         <div
-          className="p-2 sm:p-2.5 rounded-xl bg-[#141B2D] border border-[#1E293B] text-[#8B95A8] group-hover/row:text-[#00D4AA] group-hover/row:border-[#00D4AA]/40 transition-all shrink-0 flex items-center justify-center min-w-[38px] min-h-[38px]"
+          className="p-2 sm:p-2.5 rounded-xl bg-[#141B2D] border border-[#1E293B] text-[#8B95A8] group-hover/row:text-[#00D4AA] group-hover/row:border-[#00D4AA]/40 transition-[border-color,background-color,color] duration-200 shrink-0 flex items-center justify-center min-w-[38px] min-h-[38px]"
           title="Inspect video quotes and catalysts"
         >
           <ChevronRight className="w-4 h-4" />

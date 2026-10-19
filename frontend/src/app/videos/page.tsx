@@ -308,7 +308,8 @@ function VideoFilters({
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search by ticker, channel, or video title…"
-          className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-[#0A0F1A] border border-[#1E293B] text-sm text-[#F1F5F9] placeholder:text-[#475569] focus:outline-none focus:border-[#00D4AA]/40 transition-colors"
+          aria-label="Search by ticker, channel, or video title…"
+          className="w-full pl-10 pr-4 py-2.5 rounded-lg bg-[#0A0F1A] border border-[#5B6E88] text-sm text-[#F1F5F9] placeholder:text-[#8B95A8] focus:outline-none focus:border-[#00D4AA]/40 transition-colors"
         />
       </div>
 
@@ -734,7 +735,7 @@ export default function VideosPage() {
   }
 
   return (
-    <div className="min-h-screen px-4 py-8 md:px-8 md:py-12">
+    <main id="main" tabIndex={-1} className="min-h-screen px-4 py-8 md:px-8 md:py-12 outline-none">
       <div className="max-w-5xl mx-auto">
         {/* Page header */}
         <header className="mt-12 mb-4 animate-fade-up stagger-1">
@@ -818,6 +819,6 @@ export default function VideosPage() {
           </>
         )}
       </div>
-    </div>
+    </main>
   )
 }

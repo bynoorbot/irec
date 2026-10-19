@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { MotionProvider } from "@/components/MotionProvider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -53,8 +54,16 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} dark h-full antialiased`}
     >
       <body className="min-h-full flex flex-col bg-[#0A0F1A] text-[#F1F5F9] font-[family-name:var(--font-geist-sans)]" suppressHydrationWarning>
+        <a
+          href="#main"
+          className="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:bg-[#141B2D] focus:text-[#00D4AA] focus:border focus:border-[#00D4AA] focus:rounded-lg focus:outline-none focus:ring-2 focus:ring-[#00D4AA]"
+        >
+          Skip to content
+        </a>
         <Navbar />
-        {children}
+        <MotionProvider>
+          {children}
+        </MotionProvider>
         <Footer />
       </body>
     </html>

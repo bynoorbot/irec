@@ -37,6 +37,10 @@ export default function PulseField({
     window.addEventListener('resize', resize)
     resize()
 
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+
     const render = () => {
       time += speed
       ctx.clearRect(0, 0, canvas.width, canvas.height)
@@ -54,7 +58,7 @@ export default function PulseField({
         const noise2 = Math.sin(i * 0.05 - time * 0.8)
         const noise3 = Math.sin(i * 0.2 + time * 1.5)
         
-        let combinedNoise = (noise1 + noise2 + noise3) / 3
+        const combinedNoise = (noise1 + noise2 + noise3) / 3
         
         // Base height calculation
         const minHeight = height * 0.1
@@ -88,14 +92,18 @@ export default function PulseField({
         }
       }
       
-      animationFrameId = window.requestAnimationFrame(render)
+      if (!prefersReducedMotion) {
+        animationFrameId = window.requestAnimationFrame(render)
+      }
     }
     
     render()
 
     return () => {
       window.removeEventListener('resize', resize)
-      window.cancelAnimationFrame(animationFrameId)
+      if (animationFrameId) {
+        window.cancelAnimationFrame(animationFrameId)
+      }
     }
   }, [overallMood, direction])
 
@@ -105,7 +113,7 @@ export default function PulseField({
        <div className="absolute inset-0 bg-gradient-to-b from-[#141B2D]/0 via-transparent to-[#141B2D]/90 z-10" />
        {/* Fade masks left/right */}
        <div className="absolute inset-0 bg-gradient-to-r from-[#141B2D] via-transparent to-[#141B2D] z-10" />
-       <canvas ref={canvasRef} className="w-full h-full block" />
+       <canvas ref={canvasRef} aria-hidden="true" className="w-full h-full block" />
     </div>
   )
 }

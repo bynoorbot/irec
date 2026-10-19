@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import { useReducedMotion } from 'framer-motion'
 
 interface TextScrambleProps {
   text: string
@@ -17,9 +18,14 @@ export default function TextScramble({
   speed = 30,
   className = '',
 }: TextScrambleProps) {
+  const shouldReduceMotion = useReducedMotion()
   const [displayText, setDisplayText] = useState(text)
 
   useEffect(() => {
+    if (shouldReduceMotion) {
+      return
+    }
+
     let frame = 0
     const totalFrames = Math.floor(duration / speed)
     const textLength = text.length
@@ -52,7 +58,7 @@ export default function TextScramble({
     }, speed)
 
     return () => clearInterval(interval)
-  }, [text, duration, speed])
+  }, [text, duration, speed, shouldReduceMotion])
 
-  return <span className={className}>{displayText}</span>
+  return <span className={className}>{shouldReduceMotion ? text : displayText}</span>
 }

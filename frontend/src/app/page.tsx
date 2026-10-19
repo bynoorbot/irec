@@ -222,16 +222,16 @@ function MarketPulse({ aggregated }: { aggregated: AggregatedTicker[] }) {
         <div>
           <div className="flex items-center gap-2 mb-2">
             <Activity className={`w-3.5 h-3.5 ${moodConfig.direction === 'SELL' ? 'text-[#FF4D6A]' : moodConfig.direction === 'BUY' ? 'text-[#00D4AA]' : 'text-[#8B95A8]'} animate-pulse`} />
-            <h1 className="text-[10px] font-black uppercase tracking-[0.3em] text-[#64748B] font-[family-name:var(--font-geist-mono)]">
+            <p className="text-[10px] font-black uppercase tracking-[0.3em] text-[#8B95A8] font-[family-name:var(--font-geist-mono)]">
               Market Pulse
-            </h1>
+            </p>
           </div>
 
           <div className="mt-3">
             <div className="flex items-center gap-4 flex-wrap">
-              <span className={`text-4xl md:text-6xl lg:text-7xl font-black tracking-tighter ${moodConfig.color} transition-all duration-1000 leading-none`}>
+              <h1 className={`text-4xl md:text-6xl lg:text-7xl font-black tracking-tighter ${moodConfig.color} transition-all duration-1000 leading-none`}>
                 {moodConfig.title}
-              </span>
+              </h1>
               <span className="text-sm md:text-lg text-[#64748B] font-bold font-[family-name:var(--font-geist-mono)] bg-[#0A0F1A]/80 border border-[#1E293B] px-4 py-2 md:px-5 md:py-2.5 rounded-xl">
                 {moodConfig.scoreText}
               </span>
@@ -466,7 +466,7 @@ export default function Home() {
   }, [aggregated])
 
   return (
-    <div className="relative min-h-screen px-4 py-8 md:px-8 md:py-12 bg-[#0A0F1A] overflow-hidden">
+    <main id="main" tabIndex={-1} className="relative min-h-screen px-4 py-8 md:px-8 md:py-12 bg-[#0A0F1A] overflow-hidden outline-none">
       <div
         className="fixed inset-0 pointer-events-none z-50 opacity-[0.015] mix-blend-overlay"
         style={{
@@ -485,7 +485,7 @@ export default function Home() {
               <div className="aura-glow-inner" />
             </div>
 
-            <h1 className="relative text-6xl sm:text-8xl md:text-9xl lg:text-[11rem] font-extralight tracking-[0.16em] sm:tracking-[0.2em] md:tracking-[0.25em] logo-sweep leading-none">
+            <p aria-label="Aura" className="relative text-6xl sm:text-8xl md:text-9xl lg:text-[11rem] font-extralight tracking-[0.16em] sm:tracking-[0.2em] md:tracking-[0.25em] logo-sweep leading-none">
               {'aura'.split('').map((letter, i) => (
                 <span
                   key={i}
@@ -495,7 +495,7 @@ export default function Home() {
                   {letter}
                 </span>
               ))}
-            </h1>
+            </p>
 
             <a
               href="https://bynoor.io"
@@ -524,11 +524,7 @@ export default function Home() {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#00D4AA] opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-[#00D4AA]" />
               </span>
-              <span className="text-[#F1F5F9] font-bold">1,400+ signals</span>
-              <span className="text-[#334155]">•</span>
-              <span className="text-[#8B95A8]">50+ channels</span>
-              <span className="text-[#334155] hidden sm:inline">•</span>
-              <span className="text-[#00D4AA] font-bold hidden sm:inline">Live YouTube consensus</span>
+              <span className="text-[#00D4AA] font-bold">Live YouTube consensus</span>
             </div>
 
             {/* Quick Navigation Pills (All Hubs + Top Buys Anchor) */}
@@ -640,6 +636,6 @@ export default function Home() {
         )}
 
       </div>
-    </div>
+    </main>
   )
 }

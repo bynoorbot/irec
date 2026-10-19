@@ -160,7 +160,7 @@ function LoginContent() {
         </button>
 
         {/* Footer — just a quiet breath */}
-        <p className="mt-10 text-center text-[11px] text-[#475569]/60 tracking-wide">
+        <p className="mt-10 text-center text-[11px] text-[#8B95A8] tracking-wide">
           built by noor, for noor
         </p>
       </div>

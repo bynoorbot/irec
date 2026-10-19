@@ -134,7 +134,7 @@ export function Footer() {
           </div>
 
           {/* Meta */}
-          <div className="flex items-center gap-3 text-[10px] font-[family-name:var(--font-geist-mono)] text-[#374151] tracking-wide">
+          <div className="flex items-center gap-3 text-[10px] font-[family-name:var(--font-geist-mono)] text-[#8B95A8] tracking-wide">
             <span>not financial advice</span>
             <span aria-hidden="true" className="text-[#1E293B]">·</span>
             <span>© {currentYear}</span>
@@ -142,14 +142,14 @@ export function Footer() {
         </div>
 
         {/* Build hash — whisper-quiet */}
-        <div className="mt-4 text-center font-[family-name:var(--font-geist-mono)] text-[9px] text-[#1E293B] tracking-wider">
+        <div className="mt-4 text-center font-[family-name:var(--font-geist-mono)] text-[9px] text-[#64748B] tracking-wider">
           {showSplit ? (
             <span className="inline-flex items-center gap-2 flex-wrap justify-center">
               <a
                 href={`https://github.com/NoorGuru/irec/commit/${frontendCommit}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="hover:text-[#374151] transition-colors duration-300"
+                className="hover:text-[#8B95A8] transition-colors duration-300"
               >
                 fe:{frontendCommit}
                 {frontendBuildDate && (
@@ -161,7 +161,7 @@ export function Footer() {
                 href={`https://github.com/NoorGuru/irec/commit/${backendCommit}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="hover:text-[#374151] transition-colors duration-300"
+                className="hover:text-[#8B95A8] transition-colors duration-300"
               >
                 be:{backendCommit!.slice(0, 7)}
                 {backendVersion?.build_date && (
@@ -174,7 +174,7 @@ export function Footer() {
               href={`https://github.com/NoorGuru/irec/commit/${frontendCommit}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-[#374151] transition-colors duration-300"
+              className="hover:text-[#8B95A8] transition-colors duration-300"
             >
               {frontendCommit}
               {frontendBuildDate && (

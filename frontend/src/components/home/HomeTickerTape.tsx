@@ -79,13 +79,13 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
     return selected
   }, [tickers])
 
-  const handleMouseEnterItem = (item: AggregatedTicker, e: React.MouseEvent<HTMLElement>) => {
+  const handleOpenPeek = (item: AggregatedTicker, targetEl: HTMLElement) => {
     if (closeTimeoutRef.current) {
       clearTimeout(closeTimeoutRef.current)
       closeTimeoutRef.current = null
     }
 
-    const rect = e.currentTarget.getBoundingClientRect()
+    const rect = targetEl.getBoundingClientRect()
     const containerRect = tapeContainerRef.current?.getBoundingClientRect()
     const containerWidth = containerRect?.width || (typeof window !== 'undefined' ? window.innerWidth : 1200)
 
@@ -96,6 +96,10 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
 
     setActiveTicker(item)
     setClampedLeft(clamped)
+  }
+
+  const handleMouseEnterItem = (item: AggregatedTicker, e: React.MouseEvent<HTMLElement>) => {
+    handleOpenPeek(item, e.currentTarget)
   }
 
   const handleMouseLeaveItem = () => {
@@ -122,10 +126,17 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
   }
 
   useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && activeTicker) {
+        setActiveTicker(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
     return () => {
+      window.removeEventListener('keydown', handleKeyDown)
       if (closeTimeoutRef.current) clearTimeout(closeTimeoutRef.current)
     }
-  }, [])
+  }, [activeTicker])
 
   if (loading) {
     return (
@@ -181,28 +192,48 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
           {marqueeItems.map((item, idx) => {
             const isBullish = item.consensus_sentiment >= 0.5
             const isBearish = item.consensus_sentiment <= -0.5
+            const isSplit = Math.abs(item.consensus_sentiment) < 0.5 && item.analyst_count >= 2
             const isSelected = activeTicker?.ticker === item.ticker
 
             const badgeBg = isBullish
               ? 'bg-[#00D4AA]/10 border-[#00D4AA]/30 text-[#00D4AA]'
               : isBearish
               ? 'bg-[#FF4D6A]/10 border-[#FF4D6A]/30 text-[#FF4D6A]'
+              : isSplit
+              ? 'bg-[#F59E0B]/10 border-[#F59E0B]/40 text-[#F59E0B]'
               : 'bg-[#1E293B]/60 border-[#1E293B] text-[#8B95A8]'
 
             return (
-              <div
+              <button
+                type="button"
                 key={`${item.ticker}-${idx}`}
+                aria-expanded={isSelected}
                 onMouseEnter={(e) => handleMouseEnterItem(item, e)}
                 onMouseLeave={handleMouseLeaveItem}
-                onClick={() => router.push(`/ticker?s=${item.ticker}`)}
-                className={`inline-flex items-center gap-2.5 shrink-0 px-2.5 py-1 rounded-xl transition-all cursor-pointer ${
+                onFocus={(e) => handleOpenPeek(item, e.currentTarget)}
+                onBlur={handleMouseLeaveItem}
+                onClick={(e) => {
+                  if (activeTicker?.ticker === item.ticker) {
+                    router.push(`/ticker?s=${item.ticker}`)
+                  } else {
+                    handleOpenPeek(item, e.currentTarget)
+                  }
+                }}
+                className={`inline-flex items-center gap-2.5 shrink-0 px-2.5 py-1 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-[#00D4AA]/70 transition-[border-color,background-color,color] duration-200 cursor-pointer ${
                   isSelected
                     ? 'bg-[#00D4AA]/15 ring-1 ring-[#00D4AA]/40 shadow-sm'
+                    : isSplit
+                    ? 'border border-[#F59E0B]/40 hover:bg-[#1E293B]/70 hover:scale-[1.02]'
                     : 'hover:bg-[#1E293B]/70 hover:scale-[1.02]'
                 }`}
               >
-                <span className="font-[family-name:var(--font-geist-mono)] text-xs md:text-sm font-black text-[#F1F5F9] group-hover:text-[#00D4AA] transition-colors">
-                  {item.ticker}
+                <span className="font-[family-name:var(--font-geist-mono)] text-xs md:text-sm font-black text-[#F1F5F9] group-hover:text-[#00D4AA] transition-colors flex items-center gap-1.5">
+                  <span>{item.ticker}</span>
+                  {isSplit && (
+                    <span className="px-1 py-0.2 rounded text-[10px] font-bold text-[#F59E0B] border border-[#F59E0B]/40 bg-[#F59E0B]/10">
+                      SPLIT
+                    </span>
+                  )}
                 </span>
 
                 <span
@@ -221,18 +252,18 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
                 </span>
 
                 {item.avg_target_price !== null && (
-                  <span className="hidden md:inline-flex items-center gap-0.5 font-[family-name:var(--font-geist-mono)] text-[10px] text-[#64748B]">
-                    <Target className="w-2.5 h-2.5 text-[#64748B]" />
+                  <span className="hidden md:inline-flex items-center gap-0.5 font-[family-name:var(--font-geist-mono)] text-[10px] text-[#8B95A8]">
+                    <Target className="w-2.5 h-2.5 text-[#8B95A8]" />
                     <span>${item.avg_target_price.toFixed(0)}</span>
                   </span>
                 )}
 
-                <span className="text-[10px] text-[#475569] font-[family-name:var(--font-geist-mono)]">
+                <span className="text-[10px] text-[#8B95A8] font-[family-name:var(--font-geist-mono)]">
                   {item.mention_count} calls
                 </span>
 
                 <span className="text-[#1E293B]">•</span>
-              </div>
+              </button>
             )
           })}
         </div>
@@ -241,10 +272,12 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
       {/* Floating Hover Intel Card (Anchored right below the tape) */}
       {activeTicker && (
         <div
+          role="dialog"
+          aria-label={`${activeTicker.ticker} intel`}
           onMouseEnter={handlePopoverMouseEnter}
           onMouseLeave={handlePopoverMouseLeave}
           style={{ left: `${clampedLeft}px` }}
-          className="absolute top-[calc(100%+8px)] z-[100] w-[340px] sm:w-[360px] p-5 rounded-2xl bg-[#0A0F1A] border border-[#1E293B] shadow-[0_25px_70px_rgba(0,0,0,0.95)] ring-1 ring-white/10 animate-fade-up pointer-events-auto"
+          className="absolute top-[calc(100%+8px)] z-[100] w-[340px] sm:w-[360px] p-5 rounded-2xl bg-[#0A0F1A] border border-[#1E293B] shadow-[0_25px_70px_rgba(0,0,0,0.95)] ring-1 ring-white/10 motion-safe:animate-fade-up pointer-events-auto"
         >
           {/* Subtle Top Accent Glow */}
           <div
@@ -268,7 +301,7 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
                   {getSentimentLabel(activeTicker.consensus_sentiment)}
                 </span>
               </div>
-              <p className="text-xs text-[#64748B] truncate max-w-[220px] mt-0.5 font-normal">
+              <p className="text-xs text-[#8B95A8] truncate max-w-[220px] mt-0.5 font-normal">
                 {activeTicker.stock_name || 'Tracked Asset'}
               </p>
             </div>
@@ -276,7 +309,7 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
             <button
               type="button"
               onClick={() => setActiveTicker(null)}
-              className="p-1 rounded-lg text-[#64748B] hover:text-[#F1F5F9] hover:bg-[#1E293B] transition-colors"
+              className="p-1 rounded-lg text-[#8B95A8] hover:text-[#F1F5F9] hover:bg-[#1E293B] transition-colors"
             >
               <X className="w-3.5 h-3.5" />
             </button>
@@ -284,7 +317,7 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
 
           {/* Sentiment Pulse Bar */}
           <div className="mb-4">
-            <div className="flex items-center justify-between text-[10px] text-[#64748B] font-[family-name:var(--font-geist-mono)] mb-1">
+            <div className="flex items-center justify-between text-[10px] text-[#8B95A8] font-[family-name:var(--font-geist-mono)] mb-1">
               <span>Consensus Score</span>
               <span className="font-bold text-[#CBD5E1]">
                 {activeTicker.consensus_sentiment > 0
@@ -299,7 +332,7 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
           {/* Micro Metrics Matrix */}
           <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-[#141B2D]/60 border border-[#1E293B]/70 mb-4 text-center">
             <div>
-              <span className="text-[9px] text-[#64748B] font-[family-name:var(--font-geist-mono)] block uppercase">
+              <span className="text-[9px] text-[#8B95A8] font-[family-name:var(--font-geist-mono)] block uppercase">
                 Target
               </span>
               <span className="font-[family-name:var(--font-geist-mono)] text-xs font-bold text-[#F1F5F9]">
@@ -307,7 +340,7 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
               </span>
             </div>
             <div>
-              <span className="text-[9px] text-[#64748B] font-[family-name:var(--font-geist-mono)] block uppercase">
+              <span className="text-[9px] text-[#8B95A8] font-[family-name:var(--font-geist-mono)] block uppercase">
                 Conviction
               </span>
               <div className="mt-0.5">
@@ -315,11 +348,11 @@ export default function HomeTickerTape({ tickers, loading = false }: HomeTickerT
               </div>
             </div>
             <div>
-              <span className="text-[9px] text-[#64748B] font-[family-name:var(--font-geist-mono)] block uppercase">
+              <span className="text-[9px] text-[#8B95A8] font-[family-name:var(--font-geist-mono)] block uppercase">
                 Analysts
               </span>
               <span className="font-[family-name:var(--font-geist-mono)] text-xs font-bold text-[#CBD5E1]">
-                {activeTicker.analyst_count} <span className="text-[9px] text-[#64748B]">({activeTicker.mention_count} calls)</span>
+                {activeTicker.analyst_count} <span className="text-[9px] text-[#8B95A8]">({activeTicker.mention_count} calls)</span>
               </span>
             </div>
           </div>

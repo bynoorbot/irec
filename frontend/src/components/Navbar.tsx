@@ -222,10 +222,10 @@ function CommandPalette({
           </div>
         )}
 
-        <p className="hidden md:block mt-4 text-center text-[11px] text-[#374151] font-[family-name:var(--font-geist-mono)] tracking-wide">
+        <p className="hidden md:block mt-4 text-center text-[11px] text-[#8B95A8] font-[family-name:var(--font-geist-mono)] tracking-wide">
           ↑↓ navigate · ↵ select · esc close
         </p>
-        <p className="md:hidden mt-4 text-center text-[11px] text-[#374151]">
+        <p className="md:hidden mt-4 text-center text-[11px] text-[#8B95A8]">
           Tap a result or press Cancel to close
         </p>
       </div>
@@ -336,15 +336,15 @@ export function Navbar() {
 
             <button
               onClick={() => setSearchOpen(true)}
-              className="group flex items-center gap-2.5 px-3.5 py-2 rounded-full border border-[#1E293B]/80 bg-[#141B2D]/40 hover:border-[#00D4AA]/30 hover:bg-[#141B2D] transition-all duration-200"
+              className="group flex items-center gap-2.5 px-3.5 py-2 rounded-full border border-[#5B6E88] bg-[#141B2D]/40 hover:border-[#00D4AA]/30 hover:bg-[#141B2D] transition-all duration-200"
               aria-label="Search tickers (⌘K)"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" className="text-[#64748B] group-hover:text-[#00D4AA] transition-colors">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" className="text-[#8B95A8] group-hover:text-[#00D4AA] transition-colors">
                 <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="1.5" />
                 <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
-              <span className="text-sm text-[#64748B] group-hover:text-[#8B95A8] transition-colors">Search</span>
-              <kbd className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#0A0F1A] border border-[#1E293B] font-[family-name:var(--font-geist-mono)] text-[10px] text-[#374151]">
+              <span className="text-sm text-[#8B95A8] group-hover:text-[#F1F5F9] transition-colors">Search</span>
+              <kbd className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#0A0F1A] border border-[#5B6E88] font-[family-name:var(--font-geist-mono)] text-[10px] text-[#8B95A8]">
                 ⌘K
               </kbd>
             </button>

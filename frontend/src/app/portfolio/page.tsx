@@ -375,7 +375,7 @@ export default function PortfolioPage() {
   }, [portfolio, sortBy, hideLowData, searchQuery])
 
   return (
-    <div className="min-h-screen bg-[#0A0F1A] p-4 md:p-12">
+    <main id="main" tabIndex={-1} className="min-h-screen bg-[#0A0F1A] p-4 md:p-12 outline-none">
       <div className="max-w-6xl mx-auto space-y-8 animate-fade-up">
         {/* HERO BILLBOARD */}
         <div className="space-y-8">
@@ -1158,6 +1158,6 @@ export default function PortfolioPage() {
           </div>
         )}
       </div>
-    </div>
+    </main>
   )
 }

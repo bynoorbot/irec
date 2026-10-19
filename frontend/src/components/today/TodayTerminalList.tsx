@@ -83,8 +83,17 @@ export default function TodayTerminalList({ plays, sortBy, activeTab }: TodayTer
           return (
             <div
               key={play.ticker}
+              role="button"
+              tabIndex={0}
               onClick={() => router.push(`/ticker?s=${play.ticker}`)}
-              className="group relative flex items-center px-4 py-3.5 md:px-6 md:py-4 hover:bg-[#1E293B]/50 transition-colors duration-200 cursor-pointer overflow-hidden"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  router.push(`/ticker?s=${play.ticker}`)
+                }
+              }}
+              style={{ scrollMarginBottom: '9rem' }}
+              className="group relative flex items-center px-4 py-3.5 md:px-6 md:py-4 hover:bg-[#1E293B]/50 focus-visible:ring-2 focus-visible:ring-[#00D4AA]/70 outline-none transition-[border-color,background-color,color] duration-200 cursor-pointer overflow-hidden"
             >
               {/* Subtle hover gradient */}
               <div

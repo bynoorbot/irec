@@ -477,13 +477,27 @@ export default function TodayPlaysPage() {
   const [showExplainer, setShowExplainer] = useState(false)
   const [streamIndex, setStreamIndex] = useState(0)
   const [sessionRestored, setSessionRestored] = useState(false)
+  const [isDesktop, setIsDesktop] = useState(true)
+  const baseCount = isDesktop ? 18 : 8
   const [visibleCount, setVisibleCount] = useState(18)
   const headerRef = useRef<HTMLDivElement>(null)
-  const [prevFilterKey, setPrevFilterKey] = useState(`${activeTab}-${tierFilter}-${sortBy}`)
-  const currentFilterKey = `${activeTab}-${tierFilter}-${sortBy}`
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const mq = window.matchMedia('(min-width: 768px)')
+    const updateBreakpoint = () => {
+      setIsDesktop(mq.matches)
+    }
+    updateBreakpoint()
+    mq.addEventListener('change', updateBreakpoint)
+    return () => mq.removeEventListener('change', updateBreakpoint)
+  }, [])
+
+  const [prevFilterKey, setPrevFilterKey] = useState(`${activeTab}-${tierFilter}-${sortBy}-${isDesktop}`)
+  const currentFilterKey = `${activeTab}-${tierFilter}-${sortBy}-${isDesktop}`
   if (prevFilterKey !== currentFilterKey) {
     setPrevFilterKey(currentFilterKey)
-    setVisibleCount(18)
+    setVisibleCount(baseCount)
   }
 
 
@@ -1204,7 +1218,7 @@ export default function TodayPlaysPage() {
                         )}
                         <motion.div
                           layout
-                          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6"
                         >
                           <AnimatePresence mode="popLayout">
                             {strongPlays.slice(0, visibleCount).map((play, idx) => (
@@ -1221,7 +1235,7 @@ export default function TodayPlaysPage() {
                                 }}
                                 style={{
                                   contentVisibility: 'auto',
-                                  containIntrinsicSize: 'auto 420px',
+                                  containIntrinsicSize: isDesktop ? 'auto 420px' : 'auto 330px',
                                   scrollMarginBottom: '9rem'
                                 }}
                                 className="h-full"
@@ -1243,7 +1257,7 @@ export default function TodayPlaysPage() {
                         {/* Emerging Cards Grid - First class opacity (no opacity-80 dimming!) */}
                         <motion.div
                           layout
-                          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
+                          className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 md:gap-6"
                         >
                           <AnimatePresence mode="popLayout">
                             {emergingPlays.slice(0, visibleCount).map((play, idx) => (
@@ -1260,7 +1274,7 @@ export default function TodayPlaysPage() {
                                 }}
                                 style={{
                                   contentVisibility: 'auto',
-                                  containIntrinsicSize: 'auto 420px',
+                                  containIntrinsicSize: isDesktop ? 'auto 420px' : 'auto 330px',
                                   scrollMarginBottom: '9rem'
                                 }}
                                 className="h-full"
@@ -1289,7 +1303,7 @@ export default function TodayPlaysPage() {
                         <div className="flex justify-center pt-8">
                           <button
                             type="button"
-                            onClick={() => setVisibleCount((c) => c + 18)}
+                            onClick={() => setVisibleCount((c) => c + baseCount)}
                             className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-[#1E293B] bg-[#141B2D]/80 backdrop-blur-md text-sm font-medium text-[#8B95A8] hover:text-[#00D4AA] hover:border-[#00D4AA]/30 hover:bg-[#1E293B] transition-all duration-200 shadow-lg shadow-black/20 cursor-pointer"
                           >
                             <span>Load more</span>

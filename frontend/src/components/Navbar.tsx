@@ -295,7 +295,7 @@ export function Navbar() {
         role="navigation"
         aria-label="Main navigation"
       >
-        <div className="max-w-6xl mx-auto px-8">
+        <div className="max-w-6xl mx-auto px-4 lg:px-8">
           <div className="flex items-center justify-between h-[72px]">
             <Link href="/" className="group shrink-0">
               <span className="font-[family-name:var(--font-geist-mono)] text-2xl font-extralight tracking-[0.3em] logo-sweep">
@@ -303,7 +303,7 @@ export function Navbar() {
               </span>
             </Link>
 
-            <div className="flex items-center gap-0.5 rounded-full border border-[#1E293B]/80 bg-[#141B2D]/50 px-1.5 py-1.5">
+            <div className="flex items-center gap-0.5 rounded-full border border-[#1E293B]/80 bg-[#141B2D]/50 px-1.5 py-1.5 shrink-0">
               {allLinks.map((link) => {
                 const isActive = link.href === '/' ? pathname === '/' : pathname?.startsWith(link.href)
                 const Icon = link.icon
@@ -319,7 +319,7 @@ export function Navbar() {
                         sessionStorage.removeItem('today_streamIndex')
                       }
                     }}
-                    className={`relative flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 ${isActive ? 'bg-[#0A0F1A] text-[#F1F5F9] shadow-sm shadow-black/20' : 'text-[#64748B] hover:text-[#C8D1DE]'
+                    className={`relative flex items-center gap-1.5 lg:gap-2 px-2.5 lg:px-4 py-2 rounded-full text-sm font-medium transition-all duration-200 shrink-0 ${isActive ? 'bg-[#0A0F1A] text-[#F1F5F9] shadow-sm shadow-black/20' : 'text-[#64748B] hover:text-[#C8D1DE]'
                       }`}
                   >
                     <Icon active={!!isActive} />
@@ -336,15 +336,15 @@ export function Navbar() {
 
             <button
               onClick={() => setSearchOpen(true)}
-              className="group flex items-center gap-2.5 px-3.5 py-2 rounded-full border border-[#5B6E88] bg-[#141B2D]/40 hover:border-[#00D4AA]/30 hover:bg-[#141B2D] transition-all duration-200"
-              aria-label="Search tickers (⌘K)"
+              className="group flex items-center justify-center p-2.5 lg:px-3.5 lg:py-2 rounded-full border border-[#5B6E88] bg-[#141B2D]/40 hover:border-[#00D4AA]/30 hover:bg-[#141B2D] transition-all duration-200 shrink-0"
+              aria-label="Search"
             >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" className="text-[#8B95A8] group-hover:text-[#00D4AA] transition-colors">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" className="text-[#8B95A8] group-hover:text-[#00D4AA] transition-colors shrink-0" aria-hidden="true">
                 <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="1.5" />
                 <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
               </svg>
-              <span className="text-sm text-[#8B95A8] group-hover:text-[#F1F5F9] transition-colors">Search</span>
-              <kbd className="inline-flex items-center px-1.5 py-0.5 rounded bg-[#0A0F1A] border border-[#5B6E88] font-[family-name:var(--font-geist-mono)] text-[10px] text-[#8B95A8]">
+              <span className="hidden lg:inline text-sm text-[#8B95A8] group-hover:text-[#F1F5F9] transition-colors ml-2.5">Search</span>
+              <kbd className="hidden lg:inline-flex items-center px-1.5 py-0.5 rounded bg-[#0A0F1A] border border-[#5B6E88] font-[family-name:var(--font-geist-mono)] text-[10px] text-[#8B95A8] ml-2.5">
                 ⌘K
               </kbd>
             </button>

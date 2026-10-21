@@ -1,0 +1,19 @@
+[Unit]
+Description=Aura YouTube Transcript Runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=%h/.config/ytr-runner.env
+WorkingDirectory=%h/projects/irec-runner
+ExecStart=%h/projects/irec-runner/venv/bin/python server.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=%h/projects/irec-runner
+
+[Install]
+WantedBy=default.target

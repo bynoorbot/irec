@@ -2,7 +2,7 @@
  * Cloudflare Worker: YouTube Transcript Proxy
  *
  * Uses YouTube's innertube player API with ANDROID client to get transcript URLs
- * that don't require PO tokens, then fetches the actual transcript XML.
+ * that don't require PO tokens, then fetches the actual transcript XML/JSON.
  *
  * GET /transcript?v=VIDEO_ID
  * GET /debug?v=VIDEO_ID
@@ -14,7 +14,7 @@ const ALLOWED_ORIGINS = [
   'http://localhost:8000',
 ];
 
-function corsHeaders(request) {
+export function corsHeaders(request) {
   const origin = request.headers.get('Origin') || '';
   const allowed = ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
@@ -24,7 +24,7 @@ function corsHeaders(request) {
   };
 }
 
-// Same context the youtube-transcript-api library uses
+// Innertube context for ANDROID client (no PO token needed)
 const INNERTUBE_CONTEXT = {
   client: {
     clientName: 'ANDROID',
@@ -32,126 +32,149 @@ const INNERTUBE_CONTEXT = {
   },
 };
 
+// Public innertube API key
+const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
+
 /**
- * Step 1: Fetch the YouTube page to extract the innertube API key
+ * Strips a query parameter cleanly from a URL string.
  */
-async function getApiKey(videoId) {
-  const resp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-  });
+function stripParam(urlStr, param) {
+  return urlStr
+    .replace(new RegExp(`([?&])${param}=[^&]*(&|$)`, 'g'), (m, p1, p2) => (p2 === '&' ? p1 : ''))
+    .replace(/[?&]$/, '');
+}
 
-  if (!resp.ok) throw new Error(`Page fetch failed: ${resp.status}`);
-  const html = await resp.text();
+/**
+ * Appends &fmt=json3 to a URL string if not already present.
+ */
+function addFmtJson3(urlStr) {
+  if (urlStr.includes('fmt=json3')) return urlStr;
+  return urlStr + (urlStr.includes('?') ? '&' : '?') + 'fmt=json3';
+}
 
-  const match = html.match(/"INNERTUBE_API_KEY"\s*:\s*"([a-zA-Z0-9_-]+)"/);
-  if (!match) {
-    if (html.includes('class="g-recaptcha"')) {
-      throw new Error('YouTube is showing CAPTCHA (IP blocked)');
+/**
+ * Returns candidate list with kinds and URLs.
+ */
+export function candidateList(baseUrl) {
+  if (!baseUrl || typeof baseUrl !== 'string') return [];
+  const normalized = baseUrl.replace(/&amp;/g, '&');
+
+  const verbatim = normalized;
+  const verbatimJson3 = addFmtJson3(verbatim);
+  const variantStripped = stripParam(verbatim, 'variant');
+  const variantStrippedJson3 = addFmtJson3(variantStripped);
+  const expStripped = stripParam(verbatim, 'exp');
+
+  const raw = [
+    { url_kind: 'verbatim', url: verbatim },
+    { url_kind: 'verbatim+fmt=json3', url: verbatimJson3 },
+    { url_kind: 'variant-stripped', url: variantStripped },
+    { url_kind: 'variant-stripped+fmt=json3', url: variantStrippedJson3 },
+    { url_kind: 'exp-stripped', url: expStripped },
+  ];
+
+  const seen = new Set();
+  const deduped = [];
+  for (const item of raw) {
+    if (!seen.has(item.url)) {
+      seen.add(item.url);
+      deduped.push(item);
     }
-    throw new Error('Could not extract API key from page');
   }
-
-  return match[1];
+  return deduped;
 }
 
 /**
- * Step 2: Call innertube player API to get caption tracks (ANDROID client, no PO token needed)
+ * Candidate URLs ladder: verbatim, verbatim + &fmt=json3, variant-stripped,
+ * variant-stripped + &fmt=json3, exp-stripped (last resort only).
+ * Deduped and returned in order.
  */
-async function getCaptionTracks(videoId, apiKey) {
-  const resp = await fetch(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 13; en_US)',
-    },
-    body: JSON.stringify({
-      context: INNERTUBE_CONTEXT,
-      videoId: videoId,
-    }),
-  });
-
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new Error(`Player API returned ${resp.status}: ${text.substring(0, 200)}`);
-  }
-
-  const data = await resp.json();
-
-  // Check playability
-  const playability = data.playabilityStatus;
-  if (playability && playability.status !== 'OK') {
-    throw new Error(`Video not playable: ${playability.reason || playability.status}`);
-  }
-
-  const captions = data.captions;
-  if (!captions) {
-    throw new Error('No captions data in player response (video may not have subtitles)');
-  }
-
-  const tracks = captions.playerCaptionsTracklistRenderer?.captionTracks;
-  if (!tracks || tracks.length === 0) {
-    throw new Error('No caption tracks available');
-  }
-
-  return { tracks, data };
+export function candidateUrls(baseUrl) {
+  return candidateList(baseUrl).map(c => c.url);
 }
 
 /**
- * Step 3: Fetch and parse the transcript from a track URL
+ * Ranks caption tracks:
+ * 1. manual en
+ * 2. en-* manual
+ * 3. ASR en
+ * 4. any en*
+ * 5. tracks[0]
+ * Up to 3 ranked tracks are returned.
  */
-async function fetchTranscriptFromTrack(track) {
-  let url = (typeof track === 'string' ? track : track.baseUrl).replace(/&amp;/g, '&');
+export function rankTracks(tracks) {
+  if (!Array.isArray(tracks) || tracks.length === 0) return [];
 
-  // Remove variant=gemini and exp=xpe which cause empty responses
-  url = url.replace(/&variant=[^&]+/g, '');
-  url = url.replace(/&exp=[^&]+/g, '');
+  const manualEn = [];
+  const manualEnPrefix = [];
+  const asrEn = [];
+  const anyEn = [];
 
-  // Try XML format (most reliable for ANDROID client URLs)
-  const xmlResp = await fetch(url, {
-    headers: {
-      'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 13; en_US)',
-    },
-  });
-
-  if (!xmlResp.ok) {
-    throw new Error(`Transcript URL returned ${xmlResp.status}`);
+  for (const t of tracks) {
+    const lang = t.languageCode || '';
+    const isAsr = t.kind === 'asr';
+    if (lang === 'en' && !isAsr) {
+      manualEn.push(t);
+    } else if (lang.startsWith('en') && lang !== 'en' && !isAsr) {
+      manualEnPrefix.push(t);
+    } else if (lang === 'en' && isAsr) {
+      asrEn.push(t);
+    } else if (lang.startsWith('en')) {
+      anyEn.push(t);
+    }
   }
 
-  const xml = await xmlResp.text();
-  if (!xml || xml.length === 0) {
-    // Try with json3 format
-    const json3Resp = await fetch(url + '&fmt=json3', {
-      headers: {
-        'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 13; en_US)',
-      },
-    });
-    if (json3Resp.ok) {
-      const j3Text = await json3Resp.text();
-      if (j3Text.length > 0) {
-        const data = JSON.parse(j3Text);
-        const segments = [];
-        for (const event of (data.events || [])) {
-          for (const seg of (event.segs || [])) {
-            const t = (seg.utf8 || '').replace(/\n/g, ' ').trim();
-            if (t) segments.push(t);
-          }
+  const ranked = [];
+  const seen = new Set();
+  const add = (t) => {
+    if (t && !seen.has(t)) {
+      seen.add(t);
+      ranked.push(t);
+    }
+  };
+
+  manualEn.forEach(add);
+  manualEnPrefix.forEach(add);
+  asrEn.forEach(add);
+  anyEn.forEach(add);
+  if (tracks.length > 0) {
+    add(tracks[0]);
+  }
+
+  return ranked.slice(0, 3);
+}
+
+/**
+ * Parses transcript text from raw XML or JSON string.
+ */
+export function parseTranscriptBody(body) {
+  if (!body || typeof body !== 'string' || !body.trim()) {
+    return null;
+  }
+  const trimmed = body.trim();
+
+  // json3 format
+  if (trimmed.startsWith('{')) {
+    try {
+      const data = JSON.parse(trimmed);
+      const segments = [];
+      for (const event of data.events || []) {
+        for (const seg of event.segs || []) {
+          const t = (seg.utf8 || '').replace(/\n/g, ' ').trim();
+          if (t) segments.push(t);
         }
-        if (segments.length > 0) return segments.join(' ');
       }
+      if (segments.length > 0) return segments.join(' ');
+    } catch (_) {
+      // not valid json3, continue to XML regexes
     }
-    throw new Error('Empty response from transcript URL (both XML and json3)');
   }
-
-  // Parse XML
-  const segments = [];
 
   // Format 3 (srv3): uses <p> with <s> children
+  const segments = [];
   const srv3Regex = /<s[^>]*>([^<]*)<\/s>/g;
   let match;
-  while ((match = srv3Regex.exec(xml)) !== null) {
+  while ((match = srv3Regex.exec(trimmed)) !== null) {
     const t = match[1]
       .replace(/&amp;/g, '&')
       .replace(/&lt;/g, '<')
@@ -166,7 +189,7 @@ async function fetchTranscriptFromTrack(track) {
   // Fallback: classic format uses <text> tags
   if (segments.length === 0) {
     const textRegex = /<text[^>]*>([\s\S]*?)<\/text>/g;
-    while ((match = textRegex.exec(xml)) !== null) {
+    while ((match = textRegex.exec(trimmed)) !== null) {
       const t = match[1]
         .replace(/&amp;/g, '&')
         .replace(/&lt;/g, '<')
@@ -179,83 +202,298 @@ async function fetchTranscriptFromTrack(track) {
     }
   }
 
-  if (segments.length === 0) {
-    throw new Error(`Could not parse XML transcript (length: ${xml.length}, preview: ${xml.substring(0, 100)})`);
+  if (segments.length > 0) {
+    return segments.join(' ');
   }
 
-  return segments.join(' ');
-}
-
-// Public innertube API key (same for all users, rarely changes)
-const INNERTUBE_API_KEY = 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8';
-
-async function getTranscript(videoId) {
-  // Try player API first (faster, single request)
-  try {
-    const { tracks } = await getCaptionTracks(videoId, INNERTUBE_API_KEY);
-    const track = tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
-      || tracks.find(t => t.languageCode === 'en')
-      || tracks.find(t => t.languageCode?.startsWith('en'))
-      || tracks[0];
-
-    if (track?.baseUrl) {
-      return await fetchTranscriptFromTrack(track);
-    }
-  } catch (e) {
-    // Player API blocked — fall back to page scraping
-  }
-
-  // Fallback: fetch video page and extract captions from HTML
-  const pageResp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-      'Accept-Language': 'en-US,en;q=0.9',
-    },
-  });
-
-  if (!pageResp.ok) {
-    throw new Error(`All methods failed. Player API and page fetch both returned errors (page: ${pageResp.status})`);
-  }
-
-  const html = await pageResp.text();
-  const tracksJson = extractCaptionTracks(html);
-  if (!tracksJson) {
-    throw new Error('No captions found (player API blocked, page has no tracks)');
-  }
-
-  const tracks = JSON.parse(tracksJson);
-  const track = tracks.find(t => t.languageCode === 'en' && t.kind !== 'asr')
-    || tracks.find(t => t.languageCode === 'en')
-    || tracks.find(t => t.languageCode?.startsWith('en'))
-    || tracks[0];
-
-  if (!track?.baseUrl) {
-    throw new Error('No usable caption track in page data');
-  }
-
-  return await fetchTranscriptFromTrack(track);
+  return null;
 }
 
 /**
- * Extract the captionTracks JSON array from YouTube page HTML.
+ * Classifies final attempts error:
+ * - If any attempt has status 200 -> NO_CAPTIONS (422)
+ * - Else if every attempt has status > 0 and non-200 -> UPSTREAM_<status> (502) using FIRST attempt's status
+ * - Else NO_CAPTIONS (422)
  */
-function extractCaptionTracks(html) {
-  const marker = '"captionTracks":';
-  const startIdx = html.indexOf(marker);
-  if (startIdx === -1) return null;
+export function classifyAttemptsError(attempts, lang) {
+  const has200 = attempts.some(a => a.status === 200);
+  if (has200) {
+    const err = new Error(`All candidate URLs returned empty or unparseable captions for track ${lang || ''}`.trim());
+    err.error_code = 'NO_CAPTIONS';
+    err.status = 422;
+    err.stage = 'timedtext';
+    err.lang = lang;
+    err.attempts = attempts;
+    return err;
+  }
 
-  const arrayStart = html.indexOf('[', startIdx + marker.length);
-  if (arrayStart === -1) return null;
+  const allNon200Positive = attempts.length > 0 && attempts.every(
+    a => typeof a.status === 'number' && a.status > 0 && a.status !== 200
+  );
+  if (allNon200Positive) {
+    const firstStatus = attempts[0].status;
+    const err = new Error(`Timedtext failed with upstream status ${firstStatus}`);
+    err.error_code = `UPSTREAM_${firstStatus}`;
+    err.status = 502;
+    err.stage = 'timedtext';
+    err.lang = lang;
+    err.attempts = attempts;
+    return err;
+  }
 
-  let depth = 0;
-  for (let i = arrayStart; i < html.length && i < arrayStart + 100000; i++) {
-    if (html[i] === '[') depth++;
-    else if (html[i] === ']') {
-      depth--;
-      if (depth === 0) return html.substring(arrayStart, i + 1);
+  const err = new Error(`All candidate URLs failed for track ${lang || ''}`.trim());
+  err.error_code = 'UPSTREAM_NETWORK';
+  err.status = 502;
+  err.stage = 'timedtext';
+  err.lang = lang;
+  err.attempts = attempts;
+  return err;
+}
+
+/**
+ * Step 1: Call innertube player API to get caption tracks (ANDROID client, no PO token needed)
+ */
+export async function getCaptionTracks(videoId, apiKey, deadline, fetchFn = fetch) {
+  const remainingBudget = deadline - Date.now();
+  if (remainingBudget <= 0) {
+    const err = new Error('Budget exhausted before player API call');
+    err.error_code = 'DEADLINE';
+    err.status = 504;
+    err.stage = 'player';
+    err.lang = null;
+    err.attempts = [];
+    throw err;
+  }
+
+  const timeoutMs = Math.min(8000, remainingBudget);
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`Player API call timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  let data;
+  try {
+    const resp = await fetchFn(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 13; en_US)',
+      },
+      body: JSON.stringify({
+        context: INNERTUBE_CONTEXT,
+        videoId: videoId,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      const err = new Error(`Player API returned ${resp.status}: ${text.substring(0, 200)}`);
+      err.error_code = `UPSTREAM_${resp.status}`;
+      err.status = 502;
+      err.stage = 'player';
+      err.lang = null;
+      err.attempts = [];
+      throw err;
+    }
+
+    data = await resp.json();
+  } catch (err) {
+    if (err.status) throw err;
+    const isTimeout = err.name === 'AbortError' || Date.now() >= deadline;
+    const error = new Error(isTimeout ? 'Player API call timed out' : `Player fetch failed: ${err.message}`);
+    error.error_code = isTimeout ? 'DEADLINE' : 'UPSTREAM_NETWORK';
+    error.status = isTimeout ? 504 : 502;
+    error.stage = 'player';
+    error.lang = null;
+    error.attempts = [];
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  // Check playability
+  const playability = data.playabilityStatus;
+  if (playability && playability.status !== 'OK') {
+    const err = new Error(`Video not playable: ${playability.reason || playability.status}`);
+    err.error_code = 'NO_CAPTIONS';
+    err.status = 422;
+    err.stage = 'player';
+    err.lang = null;
+    err.attempts = [];
+    throw err;
+  }
+
+  const captions = data.captions;
+  if (!captions) {
+    const err = new Error('No captions data in player response (video may not have subtitles)');
+    err.error_code = 'NO_CAPTIONS';
+    err.status = 422;
+    err.stage = 'player';
+    err.lang = null;
+    err.attempts = [];
+    throw err;
+  }
+
+  const tracks = captions.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!tracks || tracks.length === 0) {
+    const err = new Error('No caption tracks available');
+    err.error_code = 'NO_CAPTIONS';
+    err.status = 422;
+    err.stage = 'player';
+    err.lang = null;
+    err.attempts = [];
+    throw err;
+  }
+
+  return { tracks, data };
+}
+
+/**
+ * Step 2: Fetch transcript from a single track using candidate ladder.
+ */
+export async function fetchTranscriptFromTrack(track, options = {}) {
+  const fetchFn = options.fetch || fetch;
+  const deadline = options.deadline || (Date.now() + 20000);
+  const attempts = options.attempts || [];
+
+  const candidates = candidateList(track.baseUrl);
+  const lang = track.languageCode || null;
+
+  for (const candidate of candidates) {
+    const remainingBudget = deadline - Date.now();
+    if (remainingBudget <= 0) {
+      const err = new Error('Request budget exhausted');
+      err.error_code = 'DEADLINE';
+      err.status = 504;
+      err.stage = 'timedtext';
+      err.lang = lang;
+      err.attempts = attempts;
+      throw err;
+    }
+
+    const timeoutMs = Math.min(10000, remainingBudget);
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new Error(`Timedtext candidate timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    let status = 0;
+    let byteCount = 0;
+
+    try {
+      const resp = await fetchFn(candidate.url, {
+        headers: {
+          'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 13; en_US)',
+        },
+        signal: controller.signal,
+      });
+
+      status = resp.status;
+      const body = await resp.text();
+      byteCount = (body || '').length;
+
+      attempts.push({
+        url_kind: candidate.url_kind,
+        status,
+        bytes: byteCount,
+      });
+
+      if (resp.ok) {
+        // Treat HTTP 200 with empty or whitespace-only body as failure of that candidate
+        if (!body || !body.trim()) {
+          continue;
+        }
+
+        const transcript = parseTranscriptBody(body);
+        if (transcript && transcript.length > 0) {
+          return {
+            transcript,
+            length: transcript.length,
+            lang,
+            attempts,
+          };
+        }
+      }
+    } catch (err) {
+      const isTimeout = err.name === 'AbortError' || Date.now() >= deadline;
+      attempts.push({
+        url_kind: candidate.url_kind,
+        status: status || 0,
+        bytes: byteCount,
+      });
+
+      if (isTimeout) {
+        const deadlineErr = new Error('Request budget exhausted');
+        deadlineErr.error_code = 'DEADLINE';
+        deadlineErr.status = 504;
+        deadlineErr.stage = 'timedtext';
+        deadlineErr.lang = lang;
+        deadlineErr.attempts = attempts;
+        throw deadlineErr;
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
-  return null;
+
+  throw classifyAttemptsError(attempts, lang);
+}
+
+/**
+ * Step 3: Fetch transcript across ranked tracks.
+ */
+export async function getTranscript(videoId, options = {}) {
+  const fetchFn = options.fetch || fetch;
+  const deadline = options.deadline || (Date.now() + 20000);
+  const attempts = [];
+
+  const { tracks } = await getCaptionTracks(videoId, INNERTUBE_API_KEY, deadline, fetchFn);
+  const ranked = rankTracks(tracks);
+
+  if (ranked.length === 0) {
+    const err = new Error('No usable caption tracks');
+    err.error_code = 'NO_CAPTIONS';
+    err.status = 422;
+    err.stage = 'player';
+    err.lang = null;
+    err.attempts = [];
+    throw err;
+  }
+
+  let lastTrackError = null;
+
+  for (const track of ranked) {
+    if (Date.now() >= deadline) {
+      const err = new Error('Request budget exhausted');
+      err.error_code = 'DEADLINE';
+      err.status = 504;
+      err.stage = 'timedtext';
+      err.lang = track.languageCode || null;
+      err.attempts = attempts;
+      throw err;
+    }
+
+    try {
+      const result = await fetchTranscriptFromTrack(track, {
+        fetch: fetchFn,
+        deadline,
+        attempts,
+      });
+      return result;
+    } catch (e) {
+      lastTrackError = e;
+      if (e.error_code === 'DEADLINE') {
+        throw e;
+      }
+    }
+  }
+
+  if (lastTrackError) {
+    throw lastTrackError;
+  }
+
+  throw classifyAttemptsError(attempts, ranked[0]?.languageCode || null);
 }
 
 export default {
@@ -271,31 +509,55 @@ export default {
       const videoId = url.searchParams.get('v');
       if (!videoId) {
         return new Response(JSON.stringify({ error: 'Need ?v=VIDEO_ID' }), {
-          status: 400, headers: { 'Content-Type': 'application/json' },
+          status: 400, headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
-      try {
-        const { tracks, data } = await getCaptionTracks(videoId, INNERTUBE_API_KEY);
-        const track = tracks[0];
-        let cleanUrl = (track.baseUrl || '').replace(/&amp;/g, '&').replace(/&variant=[^&]+/g, '').replace(/&exp=[^&]+/g, '');
 
-        // Test fetch
-        const testResp = await fetch(cleanUrl, {
+      const deadline = Date.now() + 20000;
+      try {
+        const { tracks } = await getCaptionTracks(videoId, INNERTUBE_API_KEY, deadline, fetch);
+        const ranked = rankTracks(tracks);
+        const track = ranked[0] || tracks[0];
+        const candidates = candidateList(track.baseUrl);
+
+        // Test fetch the verbatim candidate
+        const testCandidate = candidates[0];
+        const testResp = await fetch(testCandidate.url, {
           headers: { 'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 13; en_US)' },
         });
-        const testText = await testResp.text();
+        const testText = await testResp.text().catch(() => '');
 
         return new Response(JSON.stringify({
           tracksCount: tracks.length,
-          track: { lang: track.languageCode, kind: track.kind, baseUrlLength: track.baseUrl.length },
-          cleanUrl,
-          hasExpXpe: track.baseUrl.includes('exp=xpe'),
-          hasVariant: track.baseUrl.includes('variant='),
-          testFetch: { status: testResp.status, length: testText.length, preview: testText.substring(0, 300) },
-        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          rankedTracksCount: ranked.length,
+          track: {
+            lang: track.languageCode,
+            kind: track.kind,
+            baseUrlLength: track.baseUrl ? track.baseUrl.length : 0,
+          },
+          hasExpXpe: (track.baseUrl || '').includes('exp=xpe'),
+          hasVariant: (track.baseUrl || '').includes('variant='),
+          candidatesCount: candidates.length,
+          testFetch: {
+            url_kind: testCandidate.url_kind,
+            status: testResp.status,
+            bytes: testText.length,
+          },
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+        });
       } catch (e) {
-        return new Response(JSON.stringify({ error: e.message }), {
-          status: 500, headers: { 'Content-Type': 'application/json' },
+        const status = e.status || 500;
+        return new Response(JSON.stringify({
+          error: e.message,
+          error_code: e.error_code || 'UNKNOWN',
+          stage: e.stage || 'debug',
+          lang: e.lang || null,
+          attempts: e.attempts || [],
+        }), {
+          status,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
         });
       }
     }
@@ -314,14 +576,29 @@ export default {
       });
     }
 
+    const deadline = Date.now() + 20000;
+
     try {
-      const transcript = await getTranscript(videoId);
-      return new Response(JSON.stringify({ transcript, length: transcript.length }), {
-        status: 200, headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+      const result = await getTranscript(videoId, { deadline, fetch });
+      return new Response(JSON.stringify({
+        transcript: result.transcript,
+        length: result.length,
+        lang: result.lang,
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     } catch (e) {
-      return new Response(JSON.stringify({ error: e.message }), {
-        status: 422, headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+      const status = e.status || 422;
+      return new Response(JSON.stringify({
+        error: e.message || 'Unknown error',
+        error_code: e.error_code || (status === 504 ? 'DEADLINE' : (status === 502 ? 'UPSTREAM_ERROR' : 'NO_CAPTIONS')),
+        stage: e.stage || 'transcript',
+        lang: e.lang || null,
+        attempts: e.attempts || [],
+      }), {
+        status,
+        headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
       });
     }
   },

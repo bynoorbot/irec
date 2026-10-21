@@ -348,108 +348,97 @@ export function classifyAttemptsError(attempts, lang, tracksExist = true) {
 }
 
 /**
- * Step 1: Call innertube player API to get caption tracks (ANDROID client, no PO token needed)
- * Retries up to 2 times on UPSTREAM_BOTWALL with 300-600ms jittered backoff.
+ * Step 1: Call innertube player API to get caption tracks (ANDROID client, no PO token needed).
+ * Fast-fails on UPSTREAM_BOTWALL (502) immediately with no internal retries so caller can retry on fresh egress.
  */
 export async function getCaptionTracks(videoId, apiKey, deadline = (Date.now() + 10000), fetchFn = fetch) {
-  const maxBotwallRetries = 2; // up to 2 retries (total 3 attempts)
-
-  for (let attempt = 0; attempt <= maxBotwallRetries; attempt++) {
-    const remainingBudget = deadline - Date.now();
-    if (remainingBudget <= 0) {
-      const err = new Error('Budget exhausted before player API call');
-      err.error_code = 'DEADLINE';
-      err.status = 504;
-      err.stage = 'player';
-      err.lang = null;
-      err.attempts = [];
-      throw err;
-    }
-
-    const timeoutMs = Math.min(8000, remainingBudget);
-    const controller = new AbortController();
-    const timer = setTimeout(() => {
-      controller.abort(new Error(`Player API call timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    let data;
-    try {
-      const resp = await fetchFn(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 13; en_US)',
-        },
-        body: JSON.stringify({
-          context: INNERTUBE_CONTEXT,
-          videoId: videoId,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text().catch(() => '');
-        const err = new Error(`Player API returned ${resp.status}: ${text.substring(0, 200)}`);
-        err.error_code = `UPSTREAM_${resp.status}`;
-        err.status = 502;
-        err.stage = 'player';
-        err.lang = null;
-        err.attempts = [];
-        throw err;
-      }
-
-      data = await resp.json();
-    } catch (err) {
-      if (err.status) throw err;
-      const isTimeout = err.name === 'AbortError' || Date.now() >= deadline;
-      const error = new Error(isTimeout ? 'Player API call timed out' : `Player fetch failed: ${err.message}`);
-      error.error_code = isTimeout ? 'DEADLINE' : 'UPSTREAM_NETWORK';
-      error.status = isTimeout ? 504 : 502;
-      error.stage = 'player';
-      error.lang = null;
-      error.attempts = [];
-      throw error;
-    } finally {
-      clearTimeout(timer);
-    }
-
-    // Check playability
-    const playabilityErr = classifyPlayability(data.playabilityStatus);
-    if (playabilityErr) {
-      if (playabilityErr.error_code === 'UPSTREAM_BOTWALL' && attempt < maxBotwallRetries) {
-        const delay = 300 + Math.random() * 300; // 300-600ms jittered backoff
-        if (Date.now() + delay < deadline) {
-          await new Promise(r => setTimeout(r, delay));
-          continue;
-        }
-      }
-      throw playabilityErr;
-    }
-
-    const captions = data.captions;
-    if (!captions) {
-      const err = new Error('No captions data in player response (video may not have subtitles)');
-      err.error_code = 'NO_CAPTIONS';
-      err.status = 422;
-      err.stage = 'player';
-      err.lang = null;
-      err.attempts = [];
-      throw err;
-    }
-
-    const tracks = captions.playerCaptionsTracklistRenderer?.captionTracks;
-    if (!tracks || tracks.length === 0) {
-      const err = new Error('No caption tracks available');
-      err.error_code = 'NO_CAPTIONS';
-      err.status = 422;
-      err.stage = 'player';
-      err.lang = null;
-      err.attempts = [];
-      throw err;
-    }
-
-    return { tracks, data };
+  const remainingBudget = deadline - Date.now();
+  if (remainingBudget <= 0) {
+    const err = new Error('Budget exhausted before player API call');
+    err.error_code = 'DEADLINE';
+    err.status = 504;
+    err.stage = 'player';
+    err.lang = null;
+    err.attempts = [];
+    throw err;
   }
+
+  const timeoutMs = Math.min(8000, remainingBudget);
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`Player API call timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  let data;
+  try {
+    const resp = await fetchFn(`https://www.youtube.com/youtubei/v1/player?key=${apiKey}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 13; en_US)',
+      },
+      body: JSON.stringify({
+        context: INNERTUBE_CONTEXT,
+        videoId: videoId,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => '');
+      const err = new Error(`Player API returned ${resp.status}: ${text.substring(0, 200)}`);
+      err.error_code = `UPSTREAM_${resp.status}`;
+      err.status = 502;
+      err.stage = 'player';
+      err.lang = null;
+      err.attempts = [];
+      throw err;
+    }
+
+    data = await resp.json();
+  } catch (err) {
+    if (err.status) throw err;
+    const isTimeout = err.name === 'AbortError' || Date.now() >= deadline;
+    const error = new Error(isTimeout ? 'Player API call timed out' : `Player fetch failed: ${err.message}`);
+    error.error_code = isTimeout ? 'DEADLINE' : 'UPSTREAM_NETWORK';
+    error.status = isTimeout ? 504 : 502;
+    error.stage = 'player';
+    error.lang = null;
+    error.attempts = [];
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  // Check playability - fast-fails immediately if bot wall or unplayable
+  const playabilityErr = classifyPlayability(data.playabilityStatus);
+  if (playabilityErr) {
+    throw playabilityErr;
+  }
+
+  const captions = data.captions;
+  if (!captions) {
+    const err = new Error('No captions data in player response (video may not have subtitles)');
+    err.error_code = 'NO_CAPTIONS';
+    err.status = 422;
+    err.stage = 'player';
+    err.lang = null;
+    err.attempts = [];
+    throw err;
+  }
+
+  const tracks = captions.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!tracks || tracks.length === 0) {
+    const err = new Error('No caption tracks available');
+    err.error_code = 'NO_CAPTIONS';
+    err.status = 422;
+    err.stage = 'player';
+    err.lang = null;
+    err.attempts = [];
+    throw err;
+  }
+
+  return { tracks, data };
 }
 
 /**

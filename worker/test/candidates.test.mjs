@@ -298,7 +298,7 @@ describe('fetchTranscriptFromTrack', () => {
 });
 
 describe('getCaptionTracks', () => {
-  test('retries player call up to 2 times on UPSTREAM_BOTWALL with jittered backoff then fails', async () => {
+  test('fast-fails player call on UPSTREAM_BOTWALL with exactly 1 call and 502 response', async () => {
     let callCount = 0;
     const mockFetch = async () => {
       callCount++;
@@ -326,43 +326,8 @@ describe('getCaptionTracks', () => {
       }
     );
 
-    // Initial attempt + 2 retries = 3 calls
-    assert.equal(callCount, 3);
-  });
-
-  test('player call retry succeeds after transient botwall', async () => {
-    let callCount = 0;
-    const mockFetch = async () => {
-      callCount++;
-      if (callCount === 1) {
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({
-            playabilityStatus: {
-              status: 'LOGIN_REQUIRED',
-              reason: 'Sign in to confirm you are not a bot',
-            },
-          }),
-        };
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({
-          playabilityStatus: { status: 'OK' },
-          captions: {
-            playerCaptionsTracklistRenderer: {
-              captionTracks: [{ languageCode: 'en', baseUrl: 'https://timedtext.test' }],
-            },
-          },
-        }),
-      };
-    };
-
-    const res = await getCaptionTracks('botwall1234', 'testkey', Date.now() + 10000, mockFetch);
-    assert.equal(callCount, 2);
-    assert.equal(res.tracks.length, 1);
+    // Initial attempt only (no retries)
+    assert.equal(callCount, 1);
   });
 
   test('player call with terminal NO_CAPTIONS does not retry', async () => {

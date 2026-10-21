@@ -86,12 +86,12 @@ async def _fetch_via_worker(
 ) -> str | None:
     """Fetch transcript via Cloudflare Worker proxy with structured error handling.
 
-    - 12s client timeout.
-    - Classifies terminal (422 NO_CAPTIONS / NO_CAPTIONS_AGE) vs retryable (network, 429, 5xx).
-    - UPSTREAM_BOTWALL, UPSTREAM_EMPTY, UPSTREAM_NETWORK are 5xx and retryable, never terminal.
-    - Only retries worker when the failure came back fast (<= 5 seconds).
+    - 8s client timeout per attempt (dropped from 12s).
+    - Up to 3 attempts (1 initial + 2 retries) inside total deadline.
+    - Classifies terminal (422 NO_CAPTIONS / NO_CAPTIONS_AGE) vs retryable (UPSTREAM_BOTWALL,
+      UPSTREAM_EMPTY, UPSTREAM_NETWORK, 429, 5xx, and network errors).
+    - Retries retryable failures as long as remaining budget allows, using 250 to 500ms jittered backoff.
     - Never retries a terminal error; raises TerminalNoCaptionsError.
-    - Retries once on retryable error with 0.5s jittered backoff.
     - Enforces len(transcript) >= 50; below that records EmptyTranscript and falls through.
     - Records winning language in stage (e.g. 'transcript:en').
     """
@@ -109,14 +109,14 @@ async def _fetch_via_worker(
         _log_attempt(record)
         return None
 
-    max_attempts = 2  # 1 initial + 1 retry on retryable
+    max_attempts = 3  # 1 initial + 2 retries on retryable
     for attempt_idx in range(max_attempts):
         now = time.monotonic()
         remaining = deadline - now
         if remaining <= 0:
             break
 
-        timeout = min(12.0, remaining)
+        timeout = min(8.0, remaining)
         t0 = time.monotonic()
 
         try:
@@ -203,11 +203,13 @@ async def _fetch_via_worker(
                         f"Worker terminal no-captions ({resp.status_code} {err_code})"
                     )
 
-                # Only retry the worker when the failure came back fast (<= 5 seconds)
-                took_fast = duration_ms <= 5000
-                is_retryable = (resp.status_code == 429 or resp.status_code >= 500) and took_fast
+                is_retryable = (
+                    resp.status_code == 429
+                    or resp.status_code >= 500
+                    or err_code in ("UPSTREAM_BOTWALL", "UPSTREAM_EMPTY", "UPSTREAM_NETWORK")
+                )
                 if is_retryable and attempt_idx < max_attempts - 1:
-                    jittered_backoff = 0.5 + random.uniform(0.0, 0.2)
+                    jittered_backoff = random.uniform(0.25, 0.5)
                     if time.monotonic() + jittered_backoff < deadline:
                         await asyncio.sleep(jittered_backoff)
                         continue
@@ -229,9 +231,8 @@ async def _fetch_via_worker(
             attempts.append(record)
             _log_attempt(record)
 
-            took_fast = duration_ms <= 5000
-            if took_fast and attempt_idx < max_attempts - 1:
-                jittered_backoff = 0.5 + random.uniform(0.0, 0.2)
+            if attempt_idx < max_attempts - 1:
+                jittered_backoff = random.uniform(0.25, 0.5)
                 if time.monotonic() + jittered_backoff < deadline:
                     await asyncio.sleep(jittered_backoff)
                     continue
@@ -888,7 +889,7 @@ async def fetch_transcript(
 ) -> str:
     """Fetch the transcript for a YouTube video and concatenate segments.
 
-    Enforces a strict total deadline (TRANSCRIPT_DEADLINE_SECONDS, default 45s).
+    Enforces a strict total deadline (TRANSCRIPT_DEADLINE_SECONDS, default 25s).
     Wraps each remaining stage in asyncio.wait_for to prevent overrun from blocking threads.
     Enforces minimum 50 characters length on all return paths.
     Collects per-attempt record list attached to logs and final error.

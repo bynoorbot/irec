@@ -572,8 +572,8 @@ async def test_direct_last_resort_skipped_when_deadline_exhausted():
 
 
 @pytest.mark.asyncio
-async def test_worker_upstream_empty_retried_once():
-    """Worker UPSTREAM_EMPTY (502) is retried once and is never terminal."""
+async def test_worker_upstream_empty_retried_up_to_budget():
+    """Worker UPSTREAM_EMPTY (502) is retried up to attempt budget and is never terminal."""
     fake_502 = MagicMock()
     fake_502.status_code = 502
     fake_502.content = b'{"error":"All candidate URLs returned empty","error_code":"UPSTREAM_EMPTY"}'
@@ -592,16 +592,16 @@ async def test_worker_upstream_empty_retried_once():
                         with pytest.raises(HTTPException) as exc_info:
                             await fetch_transcript("abc123xyz99")
 
-    # Worker was retried once -> total 2 calls
-    assert mock_client.get.call_count == 2
+    # Worker was retried up to budget (1 initial + 2 retries = 3 calls)
+    assert mock_client.get.call_count == 3
     # Not terminal -> raises 502 UPSTREAM_BLOCKED, not 422
     assert exc_info.value.status_code == 502
     assert "UPSTREAM_BLOCKED" in exc_info.value.detail
 
 
 @pytest.mark.asyncio
-async def test_worker_upstream_botwall_retried_once_never_terminal():
-    """Worker UPSTREAM_BOTWALL (502) is retryable, retried once when fast, never terminal."""
+async def test_worker_three_walled_attempts_returns_502_upstream_blocked():
+    """Three walled worker attempts happen in a row and the final result is 502 UPSTREAM_BLOCKED."""
     fake_botwall = MagicMock()
     fake_botwall.status_code = 502
     fake_botwall.content = b'{"error":"Video not playable: Sign in to confirm you are not a bot","error_code":"UPSTREAM_BOTWALL"}'
@@ -618,21 +618,27 @@ async def test_worker_upstream_botwall_retried_once_never_terminal():
     with patch("app.transcript.PROXY_ENABLED", False):
         with patch("app.transcript.TRANSCRIPT_WORKER_URL", "https://worker.test"):
             with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
-                with patch("app.transcript.asyncio.sleep", new=AsyncMock()):
+                with patch("app.transcript.asyncio.sleep", new=AsyncMock()) as mock_sleep:
                     with patch("app.transcript._fetch_direct_last_resort", return_value=None):
                         with pytest.raises(HTTPException) as exc_info:
                             await fetch_transcript("abc123xyz99")
 
-    # Worker was retried once (call_count == 2)
-    assert mock_client.get.call_count == 2
+    # Exactly three walled attempts (1 initial + 2 retries)
+    assert mock_client.get.call_count == 3
+    assert mock_sleep.call_count == 2
     # Never terminal 422 -> final status 502
     assert exc_info.value.status_code == 502
     assert "UPSTREAM_BLOCKED" in exc_info.value.detail
+    attempts = getattr(exc_info.value, "attempts", [])
+    worker_attempts = [a for a in attempts if a.method == "worker"]
+    assert len(worker_attempts) == 3
+    for a in worker_attempts:
+        assert a.error_class == "HTTP_502_UPSTREAM_BOTWALL"
 
 
 @pytest.mark.asyncio
-async def test_worker_slow_failure_not_retried():
-    """Worker failure that took over 5 seconds is NOT retried."""
+async def test_worker_slow_failure_retried_while_budget_remains():
+    """Worker failure that took over 5 seconds is STILL retried while budget remains."""
     fake_502 = MagicMock()
     fake_502.status_code = 502
     fake_502.content = b'{"error":"Slow failure","error_code":"UPSTREAM_502"}'
@@ -645,7 +651,7 @@ async def test_worker_slow_failure_not_retried():
 
     async def fake_slow_get(*args, **kwargs):
         nonlocal clock_time
-        # Advance clock by 5.5 seconds during the HTTP request to simulate slow response
+        # Advance clock by 5.5 seconds during the HTTP request to simulate slow response (> 5s)
         clock_time += 5.5
         return fake_502
 
@@ -658,9 +664,49 @@ async def test_worker_slow_failure_not_retried():
         with patch("app.transcript.TRANSCRIPT_WORKER_URL", "https://worker.test"):
             with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
                 with patch("app.transcript.time.monotonic", side_effect=mock_clock):
-                    with patch("app.transcript._fetch_direct_last_resort", return_value=None):
-                        with pytest.raises(HTTPException):
-                            await fetch_transcript("abc123xyz99")
+                    with patch("app.transcript.asyncio.sleep", new=AsyncMock()):
+                        with patch("app.transcript._fetch_direct_last_resort", return_value=None):
+                            with pytest.raises(HTTPException):
+                                await fetch_transcript("abc123xyz99")
 
-    # Exactly 1 call because duration (5500ms > 5000ms) prevents retry
+    # With 25s deadline and 5.5s per attempt, all 3 attempts happen despite > 5s per call
+    assert mock_client.get.call_count == 3
+
+
+@pytest.mark.asyncio
+async def test_worker_slow_failure_not_retried_when_budget_exhausted():
+    """Worker failure is NOT retried once the budget is exhausted."""
+    fake_502 = MagicMock()
+    fake_502.status_code = 502
+    fake_502.content = b'{"error":"Slow failure","error_code":"UPSTREAM_502"}'
+    fake_502.json.return_value = {"error": "Slow failure", "error_code": "UPSTREAM_502"}
+
+    clock_time = 100.0
+
+    def mock_clock():
+        return clock_time
+
+    async def fake_exhausting_get(*args, **kwargs):
+        nonlocal clock_time
+        # First call takes 26 seconds, exhausting the 25.0s budget
+        clock_time += 26.0
+        return fake_502
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = fake_exhausting_get
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
+
+    with patch("app.transcript.PROXY_ENABLED", False):
+        with patch("app.transcript.TRANSCRIPT_WORKER_URL", "https://worker.test"):
+            with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
+                with patch("app.transcript.time.monotonic", side_effect=mock_clock):
+                    with patch("app.transcript.asyncio.sleep", new=AsyncMock()):
+                        with patch("app.transcript._fetch_direct_last_resort", return_value=None):
+                            with pytest.raises(HTTPException) as exc_info:
+                                await fetch_transcript("abc123xyz99")
+
+    # Only 1 call because budget was exhausted on the first attempt
     assert mock_client.get.call_count == 1
+    assert exc_info.value.status_code == 504
+    assert "INGEST_DEADLINE" in exc_info.value.detail

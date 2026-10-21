@@ -44,6 +44,42 @@ PROXY_ENABLED: bool = os.environ.get("PROXY_ENABLED", "false").lower() in (
     "yes",
 )
 
+# Home transcript runner URL (residential IP proxy)
+HOME_RUNNER_URL: str = os.environ.get("HOME_RUNNER_URL", "")
+HOME_RUNNER_TOKEN: str = os.environ.get("HOME_RUNNER_TOKEN", "")
+
+# Circuit breaker for home runner
+CIRCUIT_BREAKER_MAX_FAILURES: int = 2
+CIRCUIT_BREAKER_RESET_TIMEOUT: float = 300.0  # seconds
+
+_home_runner_consecutive_failures: int = 0
+_home_runner_circuit_open_until: float = 0.0
+
+
+def _reset_home_runner_breaker() -> None:
+    """Reset home runner circuit breaker state (useful for tests)."""
+    global _home_runner_consecutive_failures, _home_runner_circuit_open_until
+    _home_runner_consecutive_failures = 0
+    _home_runner_circuit_open_until = 0.0
+
+
+def _record_home_runner_failure() -> None:
+    """Record a failure for the home runner circuit breaker."""
+    global _home_runner_consecutive_failures, _home_runner_circuit_open_until
+    _home_runner_consecutive_failures += 1
+    if _home_runner_consecutive_failures >= CIRCUIT_BREAKER_MAX_FAILURES:
+        _home_runner_circuit_open_until = (
+            time.monotonic() + CIRCUIT_BREAKER_RESET_TIMEOUT
+        )
+        logger.warning("home_runner circuit open")
+
+
+def _record_home_runner_success() -> None:
+    """Reset consecutive failures on home runner success."""
+    global _home_runner_consecutive_failures, _home_runner_circuit_open_until
+    _home_runner_consecutive_failures = 0
+    _home_runner_circuit_open_until = 0.0
+
 # Type for an optional async retry callback: (attempt, max_retries, error, delay) -> None
 AsyncRetryCallback = Callable[[int, int, str, int], None] | None
 
@@ -253,6 +289,191 @@ async def _fetch_via_worker(
             return None
 
     return None
+
+
+async def _fetch_via_home_runner(
+    video_id: str,
+    deadline: float,
+    attempts: list[AttemptRecord],
+) -> str | None:
+    """Fetch transcript via home runner proxy with circuit breaker.
+
+    - Enabled only when HOME_RUNNER_URL is set. Optional HOME_RUNNER_TOKEN.
+    - GET {HOME_RUNNER_URL}/transcript?v=<id> with header X-Runner-Token.
+    - Client timeout 4s, clipped to remaining deadline.
+    - 200 with len(transcript) >= MIN_TRANSCRIPT_LENGTH is success.
+    - 422 NO_CAPTIONS is terminal; raises TerminalNoCaptionsError (never counts toward breaker).
+    - 502 UPSTREAM_BLOCKED, timeouts, connection errors count as failures and are retryable.
+    - Circuit breaker opens after 2 consecutive failures for 300s.
+    """
+    if not HOME_RUNNER_URL:
+        record = AttemptRecord(
+            video_id=video_id,
+            method="home_runner",
+            stage="config_check",
+            http_status=None,
+            bytes=0,
+            duration_ms=0,
+            error_class="RunnerNotConfigured",
+        )
+        attempts.append(record)
+        _log_attempt(record)
+        return None
+
+    now = time.monotonic()
+    if now < _home_runner_circuit_open_until:
+        record = AttemptRecord(
+            video_id=video_id,
+            method="home_runner",
+            stage="circuit_breaker",
+            http_status=None,
+            bytes=0,
+            duration_ms=0,
+            error_class="skipped:circuit_open",
+        )
+        attempts.append(record)
+        _log_attempt(record)
+        return None
+
+    remaining = deadline - now
+    if remaining <= 0:
+        return None
+
+    timeout = min(4.0, remaining)
+    t0 = time.monotonic()
+
+    headers: dict[str, str] = {}
+    if HOME_RUNNER_TOKEN:
+        headers["X-Runner-Token"] = HOME_RUNNER_TOKEN
+
+    url = f"{HOME_RUNNER_URL.rstrip('/')}/transcript"
+
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.get(
+                url,
+                params={"v": video_id},
+                headers=headers,
+            )
+            duration_ms = int((time.monotonic() - t0) * 1000)
+
+            if resp.status_code == 200:
+                try:
+                    data: dict[str, Any] = resp.json()
+                except Exception:
+                    data = {}
+                transcript_val = data.get("transcript", "")
+                lang_val = data.get("lang")
+                stage = f"transcript:{lang_val}" if lang_val else "transcript"
+                transcript = (
+                    transcript_val.strip() if isinstance(transcript_val, str) else ""
+                )
+
+                if len(transcript) >= MIN_TRANSCRIPT_LENGTH:
+                    _record_home_runner_success()
+                    record = AttemptRecord(
+                        video_id=video_id,
+                        method="home_runner",
+                        stage=stage,
+                        http_status=200,
+                        bytes=len(transcript.encode("utf-8")),
+                        duration_ms=duration_ms,
+                        error_class=None,
+                    )
+                    attempts.append(record)
+                    _log_attempt(record)
+                    return transcript
+                else:
+                    record = AttemptRecord(
+                        video_id=video_id,
+                        method="home_runner",
+                        stage=stage,
+                        http_status=200,
+                        bytes=len(transcript.encode("utf-8")),
+                        duration_ms=duration_ms,
+                        error_class="EmptyTranscript",
+                    )
+                    attempts.append(record)
+                    _log_attempt(record)
+                    return None
+
+            # Non-200 response
+            body_bytes = len(resp.content)
+            try:
+                data = resp.json()
+                err_code = str(data.get("error_code", ""))
+                stage = str(data.get("stage", "fetch"))
+            except Exception:
+                data = {}
+                err_code = ""
+                stage = "fetch"
+
+            is_terminal = resp.status_code == 422 or err_code in (
+                "NO_CAPTIONS",
+                "NO_CAPTIONS_AGE",
+            )
+            error_class = (
+                f"HTTP_{resp.status_code}_{err_code}"
+                if err_code
+                else f"HTTP_{resp.status_code}"
+            )
+
+            record = AttemptRecord(
+                video_id=video_id,
+                method="home_runner",
+                stage=stage,
+                http_status=resp.status_code,
+                bytes=body_bytes,
+                duration_ms=duration_ms,
+                error_class=error_class,
+            )
+            attempts.append(record)
+            _log_attempt(record)
+
+            if is_terminal:
+                # Terminal: never skip it for a terminal NO_CAPTIONS
+                raise TerminalNoCaptionsError(
+                    f"Home runner terminal no-captions ({resp.status_code} {err_code})"
+                )
+
+            # Failure: 5xx or 429 counts toward circuit breaker
+            if resp.status_code >= 500 or resp.status_code == 429:
+                _record_home_runner_failure()
+
+            return None
+
+    except TerminalNoCaptionsError:
+        raise
+    except (httpx.RequestError, httpx.TimeoutException) as e:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        _record_home_runner_failure()
+        record = AttemptRecord(
+            video_id=video_id,
+            method="home_runner",
+            stage="fetch",
+            http_status=None,
+            bytes=0,
+            duration_ms=duration_ms,
+            error_class=type(e).__name__,
+        )
+        attempts.append(record)
+        _log_attempt(record)
+        return None
+    except Exception as e:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        _record_home_runner_failure()
+        record = AttemptRecord(
+            video_id=video_id,
+            method="home_runner",
+            stage="fetch",
+            http_status=None,
+            bytes=0,
+            duration_ms=duration_ms,
+            error_class=type(e).__name__,
+        )
+        attempts.append(record)
+        _log_attempt(record)
+        return None
 
 
 def _build_api() -> YouTubeTranscriptApi:
@@ -896,8 +1117,9 @@ async def fetch_transcript(
 
     Strategy ladder:
     1. Cloudflare Worker proxy (edge IPs, not blocked by YouTube)
-    2. yt-dlp with mobile/TV client strategies (only if PROXY_ENABLED or no worker URL)
-    3. youtube-transcript-api (with proxy if PROXY_ENABLED, else direct bounded last resort)
+    2. Home runner proxy (residential IP egress via Cloudflare Tunnel)
+    3. yt-dlp with mobile/TV client strategies (only if PROXY_ENABLED or no worker URL)
+    4. youtube-transcript-api (with proxy if PROXY_ENABLED, else direct bounded last resort)
 
     Raises:
         HTTPException(422): TRANSCRIPT_UNAVAILABLE for terminal no-captions.
@@ -957,7 +1179,44 @@ async def fetch_transcript(
             video_id=video_id,
         )
 
-    # Method 2: yt-dlp (runs ONLY when PROXY_ENABLED is True OR TRANSCRIPT_WORKER_URL is empty)
+    # Method 2: Home Runner proxy (residential IP egress via Cloudflare Tunnel)
+    try:
+        runner_result = await asyncio.wait_for(
+            _fetch_via_home_runner(
+                video_id,
+                deadline=deadline,
+                attempts=attempts,
+            ),
+            timeout=rem,
+        )
+        if runner_result:
+            return runner_result
+    except TimeoutError:
+        _raise_http_error(
+            504,
+            "INGEST_DEADLINE: transcript fetch exceeded deadline during home runner stage",
+            attempts,
+            video_id=video_id,
+        )
+    except TerminalNoCaptionsError:
+        has_terminal_no_captions = True
+        _raise_http_error(
+            422,
+            "TRANSCRIPT_UNAVAILABLE: No captions available for video",
+            attempts,
+            video_id=video_id,
+        )
+
+    rem = _get_rem()
+    if rem <= 0:
+        _raise_http_error(
+            504,
+            "INGEST_DEADLINE: transcript fetch exceeded deadline after home runner",
+            attempts,
+            video_id=video_id,
+        )
+
+    # Method 3: yt-dlp (runs ONLY when PROXY_ENABLED is True OR TRANSCRIPT_WORKER_URL is empty)
     should_run_ytdlp = PROXY_ENABLED or not TRANSCRIPT_WORKER_URL
     if not should_run_ytdlp:
         rec = AttemptRecord(
@@ -1001,7 +1260,7 @@ async def fetch_transcript(
             video_id=video_id,
         )
 
-    # Method 3: youtube-transcript-api (proxy if PROXY_ENABLED, else direct bounded last resort)
+    # Method 4: youtube-transcript-api (proxy if PROXY_ENABLED, else direct bounded last resort)
     if not PROXY_ENABLED:
         direct_timeout = min(8.0, rem)
         try:

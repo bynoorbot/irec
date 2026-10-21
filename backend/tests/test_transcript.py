@@ -5,6 +5,7 @@ import logging
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -12,11 +13,21 @@ from app.transcript import (
     AttemptRecord,
     RequestBlocked,
     _fetch_direct_last_resort,
+    _fetch_via_home_runner,
     _fetch_via_worker,
     _fetch_with_retry,
     _raise_http_error,
+    _reset_home_runner_breaker,
     fetch_transcript,
 )
+
+
+@pytest.fixture(autouse=True)
+def reset_breaker():
+    """Ensure circuit breaker state is fresh for every test."""
+    _reset_home_runner_breaker()
+    yield
+    _reset_home_runner_breaker()
 
 
 class FakeSnippet:
@@ -710,3 +721,216 @@ async def test_worker_slow_failure_not_retried_when_budget_exhausted():
     assert mock_client.get.call_count == 1
     assert exc_info.value.status_code == 504
     assert "INGEST_DEADLINE" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_runner_success_returns_transcript():
+    """Runner success returns transcript and records language in stage."""
+    valid_text = "This is a valid transcript from the home runner service that easily exceeds 50 characters."
+    fake_resp = MagicMock()
+    fake_resp.status_code = 200
+    fake_resp.content = b'{"transcript":"' + valid_text.encode() + b'","lang":"en"}'
+    fake_resp.json.return_value = {
+        "transcript": valid_text,
+        "length": len(valid_text),
+        "lang": "en",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = fake_resp
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
+
+    with patch("app.transcript._fetch_via_worker", return_value=None):
+        with patch("app.transcript.HOME_RUNNER_URL", "https://runner.test"):
+            with patch("app.transcript.HOME_RUNNER_TOKEN", "secret-token"):
+                with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
+                    result = await fetch_transcript("abc123xyz99")
+
+    assert result == valid_text
+    mock_client.get.assert_called_once()
+    call_args, call_kwargs = mock_client.get.call_args
+    assert call_args[0] == "https://runner.test/transcript"
+    assert call_kwargs["params"] == {"v": "abc123xyz99"}
+    assert call_kwargs["headers"] == {"X-Runner-Token": "secret-token"}
+
+
+@pytest.mark.asyncio
+async def test_runner_422_is_terminal():
+    """Runner 422 NO_CAPTIONS is terminal: raises 422 immediately and ends ladder."""
+    fake_resp = MagicMock()
+    fake_resp.status_code = 422
+    fake_resp.content = b'{"error":"No captions available","error_code":"NO_CAPTIONS"}'
+    fake_resp.json.return_value = {
+        "error": "No captions available",
+        "error_code": "NO_CAPTIONS",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = fake_resp
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
+
+    with patch("app.transcript._fetch_via_worker", return_value=None):
+        with patch("app.transcript.HOME_RUNNER_URL", "https://runner.test"):
+            with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
+                with patch("app.transcript._fetch_direct_last_resort") as mock_direct:
+                    with pytest.raises(HTTPException) as exc_info:
+                        await fetch_transcript("abc123xyz99")
+
+    assert exc_info.value.status_code == 422
+    assert "TRANSCRIPT_UNAVAILABLE" in exc_info.value.detail
+    mock_direct.assert_not_called()
+    attempts = getattr(exc_info.value, "attempts", [])
+    runner_attempts = [a for a in attempts if a.method == "home_runner"]
+    assert len(runner_attempts) == 1
+    assert runner_attempts[0].http_status == 422
+    assert runner_attempts[0].error_class == "HTTP_422_NO_CAPTIONS"
+
+
+@pytest.mark.asyncio
+async def test_runner_502_is_retryable():
+    """Runner 502 UPSTREAM_BLOCKED is retryable: falls through to next stage."""
+    fake_resp = MagicMock()
+    fake_resp.status_code = 502
+    fake_resp.content = b'{"error":"Upstream blocked","error_code":"UPSTREAM_BLOCKED"}'
+    fake_resp.json.return_value = {
+        "error": "Upstream blocked",
+        "error_code": "UPSTREAM_BLOCKED",
+    }
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = fake_resp
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
+
+    valid_text = "Direct fallback transcript that succeeds after runner 502 with more than 50 characters."
+
+    with patch("app.transcript._fetch_via_worker", return_value=None):
+        with patch("app.transcript.HOME_RUNNER_URL", "https://runner.test"):
+            with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
+                with patch("app.transcript.TRANSCRIPT_WORKER_URL", "https://worker.test"):
+                    with patch("app.transcript.PROXY_ENABLED", False):
+                        with patch("app.transcript._fetch_direct_last_resort", return_value=valid_text):
+                            result = await fetch_transcript("abc123xyz99")
+
+    assert result == valid_text
+
+
+@pytest.mark.asyncio
+async def test_runner_breaker_opens_after_two_failures_and_skips(caplog):
+    """After 2 consecutive failures, breaker opens and next call skips runner without network attempt."""
+    fake_502 = MagicMock()
+    fake_502.status_code = 502
+    fake_502.content = b'{"error":"Upstream blocked","error_code":"UPSTREAM_BLOCKED"}'
+    fake_502.json.return_value = {"error": "Upstream blocked", "error_code": "UPSTREAM_BLOCKED"}
+
+    mock_client = AsyncMock()
+    mock_client.get.return_value = fake_502
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
+
+    valid_direct = "Fallback direct transcript exceeding fifty characters threshold for testing purposes."
+
+    with caplog.at_level(logging.WARNING):
+        with patch("app.transcript._fetch_via_worker", return_value=None):
+            with patch("app.transcript.HOME_RUNNER_URL", "https://runner.test"):
+                with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
+                    with patch("app.transcript.TRANSCRIPT_WORKER_URL", "https://worker.test"):
+                        with patch("app.transcript.PROXY_ENABLED", False):
+                            with patch("app.transcript._fetch_direct_last_resort", return_value=valid_direct):
+                                # Call 1: failure 1
+                                res1 = await fetch_transcript("vid1")
+                                assert res1 == valid_direct
+                                assert mock_client.get.call_count == 1
+
+                                # Call 2: failure 2 -> breaker opens!
+                                res2 = await fetch_transcript("vid2")
+                                assert res2 == valid_direct
+                                assert mock_client.get.call_count == 2
+                                assert any("home_runner circuit open" in rec.message for rec in caplog.records)
+
+                                # Call 3: skipped! mock_client.get should NOT be called again
+                                attempts: list[AttemptRecord] = []
+                                res3 = await _fetch_via_home_runner("vid3", deadline=1e9, attempts=attempts)
+                                assert res3 is None
+                                # Call count remains 2 (no network call made!)
+                                assert mock_client.get.call_count == 2
+                                assert len(attempts) == 1
+                                assert attempts[0].stage == "circuit_breaker"
+                                assert attempts[0].error_class == "skipped:circuit_open"
+
+
+@pytest.mark.asyncio
+async def test_runner_timeout_bounded_falls_through_to_next_stage():
+    """Runner timeout is bounded and falls through to next stage."""
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = httpx.ReadTimeout("Timed out")
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
+
+    valid_direct = "Direct stage transcript succeeds after home runner timed out with > 50 chars."
+
+    with patch("app.transcript._fetch_via_worker", return_value=None):
+        with patch("app.transcript.HOME_RUNNER_URL", "https://runner.test"):
+            with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
+                with patch("app.transcript.TRANSCRIPT_WORKER_URL", "https://worker.test"):
+                    with patch("app.transcript.PROXY_ENABLED", False):
+                        with patch("app.transcript._fetch_direct_last_resort", return_value=valid_direct):
+                            result = await fetch_transcript("abc123xyz99")
+
+    assert result == valid_direct
+
+
+@pytest.mark.asyncio
+async def test_runner_missing_url_skips_stage_with_record():
+    """When HOME_RUNNER_URL is not set, stage is skipped with RunnerNotConfigured record."""
+    attempts: list[AttemptRecord] = []
+    with patch("app.transcript.HOME_RUNNER_URL", ""):
+        result = await _fetch_via_home_runner("abc123xyz99", deadline=1e9, attempts=attempts)
+
+    assert result is None
+    assert len(attempts) == 1
+    assert attempts[0].method == "home_runner"
+    assert attempts[0].stage == "config_check"
+    assert attempts[0].error_class == "RunnerNotConfigured"
+
+
+@pytest.mark.asyncio
+async def test_runner_success_resets_breaker():
+    """A success resets consecutive failure count."""
+    fake_502 = MagicMock()
+    fake_502.status_code = 502
+    fake_502.content = b'{"error":"502"}'
+    fake_502.json.return_value = {}
+
+    valid_text = "Successful transcript text from runner with more than fifty characters."
+    fake_200 = MagicMock()
+    fake_200.status_code = 200
+    fake_200.content = b'{"transcript":"' + valid_text.encode() + b'"}'
+    fake_200.json.return_value = {"transcript": valid_text, "lang": "en"}
+
+    mock_client = AsyncMock()
+    mock_client.get.side_effect = [fake_502, fake_200, fake_502]
+    mock_client.__aenter__.return_value = mock_client
+    mock_client.__aexit__.return_value = None
+
+    with patch("app.transcript.HOME_RUNNER_URL", "https://runner.test"):
+        with patch("app.transcript.httpx.AsyncClient", return_value=mock_client):
+            # Attempt 1: 502 (consecutive = 1)
+            att1: list[AttemptRecord] = []
+            res1 = await _fetch_via_home_runner("v1", 1e9, att1)
+            assert res1 is None
+
+            # Attempt 2: 200 (resets consecutive to 0)
+            att2: list[AttemptRecord] = []
+            res2 = await _fetch_via_home_runner("v2", 1e9, att2)
+            assert res2 == valid_text
+
+            # Attempt 3: 502 (consecutive = 1, NOT 2, circuit does not open)
+            att3: list[AttemptRecord] = []
+            res3 = await _fetch_via_home_runner("v3", 1e9, att3)
+            assert res3 is None
+            from app.transcript import _home_runner_consecutive_failures, _home_runner_circuit_open_until
+            assert _home_runner_consecutive_failures == 1
+            assert _home_runner_circuit_open_until == 0.0

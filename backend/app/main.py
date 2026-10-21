@@ -118,26 +118,36 @@ async def debug_transcript(
     except Exception as e:
         results["worker"] = {"success": False, "error": f"{type(e).__name__}: {e}"}
 
-    # Test youtube-transcript-api (no proxy)
+    # Test youtube-transcript-api (direct / no proxy)
     try:
         from youtube_transcript_api import YouTubeTranscriptApi
         api = YouTubeTranscriptApi()
         import asyncio
         result = await asyncio.to_thread(api.fetch, video_id, languages=["en", "en-US", "en-GB"])
         text = " ".join(s.text for s in result.snippets)
-        results["yt_api_no_proxy"] = {"success": True, "length": len(text), "preview": text[:200]}
+        results["yt_api_direct"] = {"success": True, "length": len(text), "preview": text[:200]}
     except Exception as e:
-        results["yt_api_no_proxy"] = {"success": False, "error": f"{type(e).__name__}: {str(e)[:300]}"}
+        results["yt_api_direct"] = {"success": False, "error": f"{type(e).__name__}: {str(e)[:300]}"}
 
-    # Test youtube-transcript-api (with proxy)
+    # Test youtube-transcript-api (with proxy config)
+    from app.transcript import PROXY_ENABLED
     try:
         api = _build_api()
         import asyncio
         result = await asyncio.to_thread(api.fetch, video_id, languages=["en", "en-US", "en-GB"])
         text = " ".join(s.text for s in result.snippets)
-        results["yt_api_proxy"] = {"success": True, "length": len(text), "preview": text[:200]}
+        results["yt_api_with_proxy_config"] = {
+            "success": True,
+            "length": len(text),
+            "preview": text[:200],
+            "proxy_enabled": PROXY_ENABLED,
+        }
     except Exception as e:
-        results["yt_api_proxy"] = {"success": False, "error": f"{type(e).__name__}: {str(e)[:300]}"}
+        results["yt_api_with_proxy_config"] = {
+            "success": False,
+            "error": f"{type(e).__name__}: {str(e)[:300]}",
+            "proxy_enabled": PROXY_ENABLED,
+        }
 
     return results
 

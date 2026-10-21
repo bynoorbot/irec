@@ -29,9 +29,9 @@ BASE_DELAY_SECONDS: int = 3
 # Minimum length for an accepted transcript (below 50 chars is rejected as EmptyTranscript)
 MIN_TRANSCRIPT_LENGTH: int = 50
 
-# Total deadline for transcript retrieval (default 45 seconds)
+# Total deadline for transcript retrieval (default 25 seconds)
 TRANSCRIPT_DEADLINE_SECONDS: float = float(
-    os.environ.get("TRANSCRIPT_DEADLINE_SECONDS", "45")
+    os.environ.get("TRANSCRIPT_DEADLINE_SECONDS", "25")
 )
 
 # Cloudflare Worker URL for transcript proxy (bypasses datacenter IP blocks)
@@ -86,8 +86,10 @@ async def _fetch_via_worker(
 ) -> str | None:
     """Fetch transcript via Cloudflare Worker proxy with structured error handling.
 
-    - 22s client timeout.
-    - Classifies terminal (422 NO_CAPTIONS) vs retryable (network, 429, 5xx).
+    - 12s client timeout.
+    - Classifies terminal (422 NO_CAPTIONS / NO_CAPTIONS_AGE) vs retryable (network, 429, 5xx).
+    - UPSTREAM_BOTWALL, UPSTREAM_EMPTY, UPSTREAM_NETWORK are 5xx and retryable, never terminal.
+    - Only retries worker when the failure came back fast (<= 5 seconds).
     - Never retries a terminal error; raises TerminalNoCaptionsError.
     - Retries once on retryable error with 0.5s jittered backoff.
     - Enforces len(transcript) >= 50; below that records EmptyTranscript and falls through.
@@ -114,7 +116,7 @@ async def _fetch_via_worker(
         if remaining <= 0:
             break
 
-        timeout = min(22.0, remaining)
+        timeout = min(12.0, remaining)
         t0 = time.monotonic()
 
         try:
@@ -176,7 +178,7 @@ async def _fetch_via_worker(
                     err_code = ""
                     stage = "fetch"
 
-                is_terminal = resp.status_code == 422 or err_code == "NO_CAPTIONS"
+                is_terminal = resp.status_code == 422 or err_code in ("NO_CAPTIONS", "NO_CAPTIONS_AGE")
                 error_class = (
                     f"HTTP_{resp.status_code}_{err_code}"
                     if err_code
@@ -201,7 +203,9 @@ async def _fetch_via_worker(
                         f"Worker terminal no-captions ({resp.status_code} {err_code})"
                     )
 
-                is_retryable = resp.status_code == 429 or resp.status_code >= 500
+                # Only retry the worker when the failure came back fast (<= 5 seconds)
+                took_fast = duration_ms <= 5000
+                is_retryable = (resp.status_code == 429 or resp.status_code >= 500) and took_fast
                 if is_retryable and attempt_idx < max_attempts - 1:
                     jittered_backoff = 0.5 + random.uniform(0.0, 0.2)
                     if time.monotonic() + jittered_backoff < deadline:
@@ -225,7 +229,8 @@ async def _fetch_via_worker(
             attempts.append(record)
             _log_attempt(record)
 
-            if attempt_idx < max_attempts - 1:
+            took_fast = duration_ms <= 5000
+            if took_fast and attempt_idx < max_attempts - 1:
                 jittered_backoff = 0.5 + random.uniform(0.0, 0.2)
                 if time.monotonic() + jittered_backoff < deadline:
                     await asyncio.sleep(jittered_backoff)
@@ -768,6 +773,91 @@ async def _fetch_proxy_stage(
     return None
 
 
+async def _fetch_direct_last_resort(
+    video_id: str,
+    timeout: float,
+    attempts: list[AttemptRecord],
+) -> str | None:
+    """Run youtube-transcript-api directly with no proxy as a bounded last resort.
+
+    Runs once, capped by min(8.0, remaining_deadline), no retries, no multi-retry sleeps.
+    Records attempt and returns transcript if successful (>= 50 chars), else None.
+    If it raises RequestBlocked/IpBlocked/timeout/etc., records attempt and continues.
+    """
+    from youtube_transcript_api import YouTubeTranscriptApi
+
+    t0 = time.monotonic()
+    api = YouTubeTranscriptApi()
+
+    try:
+        result = await asyncio.wait_for(
+            asyncio.to_thread(
+                api.fetch, video_id, languages=["en", "en-US", "en-GB"]
+            ),
+            timeout=timeout,
+        )
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        raw_text = " ".join(
+            getattr(s, "text", "") for s in getattr(result, "snippets", [])
+        ).strip()
+
+        if len(raw_text) >= MIN_TRANSCRIPT_LENGTH:
+            rec = AttemptRecord(
+                video_id=video_id,
+                method="youtube_transcript_api_direct",
+                stage="direct",
+                http_status=200,
+                bytes=len(raw_text.encode("utf-8")),
+                duration_ms=duration_ms,
+                error_class=None,
+            )
+            attempts.append(rec)
+            _log_attempt(rec)
+            return raw_text
+        else:
+            rec = AttemptRecord(
+                video_id=video_id,
+                method="youtube_transcript_api_direct",
+                stage="direct",
+                http_status=200,
+                bytes=len(raw_text.encode("utf-8")),
+                duration_ms=duration_ms,
+                error_class="EmptyTranscript",
+            )
+            attempts.append(rec)
+            _log_attempt(rec)
+            return None
+    except TimeoutError:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        rec = AttemptRecord(
+            video_id=video_id,
+            method="youtube_transcript_api_direct",
+            stage="direct",
+            http_status=None,
+            bytes=0,
+            duration_ms=duration_ms,
+            error_class="TimeoutError",
+        )
+        attempts.append(rec)
+        _log_attempt(rec)
+        return None
+    except Exception as e:
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        error_class = type(e).__name__
+        rec = AttemptRecord(
+            video_id=video_id,
+            method="youtube_transcript_api_direct",
+            stage="direct",
+            http_status=None,
+            bytes=0,
+            duration_ms=duration_ms,
+            error_class=error_class,
+        )
+        attempts.append(rec)
+        _log_attempt(rec)
+        return None
+
+
 def _raise_http_error(
     status_code: int,
     detail: str,
@@ -806,7 +896,7 @@ async def fetch_transcript(
     Strategy ladder:
     1. Cloudflare Worker proxy (edge IPs, not blocked by YouTube)
     2. yt-dlp with mobile/TV client strategies (only if PROXY_ENABLED or no worker URL)
-    3. youtube-transcript-api with proxy + retries (if PROXY_ENABLED)
+    3. youtube-transcript-api (with proxy if PROXY_ENABLED, else direct bounded last resort)
 
     Raises:
         HTTPException(422): TRANSCRIPT_UNAVAILABLE for terminal no-captions.
@@ -910,19 +1000,28 @@ async def fetch_transcript(
             video_id=video_id,
         )
 
-    # Method 3: youtube-transcript-api with proxy (only if PROXY_ENABLED)
+    # Method 3: youtube-transcript-api (proxy if PROXY_ENABLED, else direct bounded last resort)
     if not PROXY_ENABLED:
-        rec = AttemptRecord(
-            video_id=video_id,
-            method="youtube_transcript_api_proxy",
-            stage="proxy_check",
-            http_status=None,
-            bytes=0,
-            duration_ms=0,
-            error_class="skipped:no_proxy",
-        )
-        attempts.append(rec)
-        _log_attempt(rec)
+        direct_timeout = min(8.0, rem)
+        try:
+            direct_res = await asyncio.wait_for(
+                _fetch_direct_last_resort(video_id, direct_timeout, attempts),
+                timeout=rem,
+            )
+            if direct_res:
+                return direct_res
+        except TimeoutError:
+            rec = AttemptRecord(
+                video_id=video_id,
+                method="youtube_transcript_api_direct",
+                stage="direct",
+                http_status=None,
+                bytes=0,
+                duration_ms=int(direct_timeout * 1000),
+                error_class="TimeoutError",
+            )
+            attempts.append(rec)
+            _log_attempt(rec)
     else:
         try:
             proxy_res = await asyncio.wait_for(

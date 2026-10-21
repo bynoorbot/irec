@@ -426,6 +426,7 @@ function JobCard({
 
       const decoder = new TextDecoder()
       let buffer = ''
+      let terminalReceived = false
 
       while (true) {
         const { done, value } = await reader.read()
@@ -440,10 +441,12 @@ function JobCard({
             try {
               const event = JSON.parse(line.slice(6))
               if (event.step === 'complete' && event.status === 'done') {
+                terminalReceived = true
                 setResult(event.result)
                 setTotalCompletedAt(Date.now())
                 onSuccess(config.url)
               } else if (event.status === 'error') {
+                terminalReceived = true
                 updateStep(event.step, 'error', event.detail)
                 setPipelineError(event.detail || 'An error occurred')
                 onFailed(config.url, event.detail || 'An error occurred')
@@ -466,6 +469,63 @@ function JobCard({
         }
       }
 
+      if (buffer.trim().startsWith('data: ')) {
+        try {
+          const event = JSON.parse(buffer.trim().slice(6))
+          if (event.step === 'complete' && event.status === 'done') {
+            terminalReceived = true
+            setResult(event.result)
+            setTotalCompletedAt(Date.now())
+            onSuccess(config.url)
+          } else if (event.status === 'error') {
+            terminalReceived = true
+            updateStep(event.step, 'error', event.detail)
+            setPipelineError(event.detail || 'An error occurred')
+            onFailed(config.url, event.detail || 'An error occurred')
+            if (event.step === 'duplicate_check' && event.detail === 'Video already processed') {
+              setIsDuplicate(true)
+            }
+            if (event.needs_manual) {
+              setShowManualPaste(true)
+              if (event.video_id) setManualVideoId(event.video_id)
+              if (event.worker_url) setWorkerUrl(event.worker_url)
+            }
+            setTotalCompletedAt(Date.now())
+          } else {
+            updateStep(event.step, event.status, event.detail)
+          }
+        } catch {
+          // skip
+        }
+      }
+
+      if (!terminalReceived) {
+        const errMsg = 'Connection closed before pipeline completed.'
+        setPipelineError(errMsg)
+        onFailed(config.url, errMsg)
+        setTotalCompletedAt(Date.now())
+        setSteps((prev) => {
+          let marked = false
+          const updated = prev.map((s) => {
+            if (s.status === 'running' || s.status === 'retrying') {
+              marked = true
+              return { ...s, status: 'error' as StepStatus, detail: errMsg, completedAt: Date.now() }
+            }
+            return s
+          })
+          if (!marked) {
+            return updated.map((s) => {
+              if (!marked && s.status === 'pending') {
+                marked = true
+                return { ...s, status: 'error' as StepStatus, detail: errMsg, startedAt: s.startedAt || Date.now(), completedAt: Date.now() }
+              }
+              return s
+            })
+          }
+          return updated
+        })
+      }
+
       setSteps((prev) => {
         const hasError = prev.some((s) => s.status === 'error')
         if (!hasError) {
@@ -481,11 +541,32 @@ function JobCard({
         setPipelineError('Ingestion cancelled by user.')
         setTotalCompletedAt(Date.now())
         // mark running steps as error
-        setSteps(prev => prev.map(s => s.status === 'running' || s.status === 'retrying' ? { ...s, status: 'error', detail: 'Cancelled' } : s))
+        setSteps(prev => prev.map(s => s.status === 'running' || s.status === 'retrying' ? { ...s, status: 'error', detail: 'Cancelled', completedAt: Date.now() } : s))
       } else {
-        setPipelineError('Network error. Check your connection and try again.')
-        onFailed(config.url, 'Network error. Check your connection and try again.')
+        const errMsg = e?.message ? `Network error: ${e.message}` : 'Network error. Check your connection and try again.'
+        setPipelineError(errMsg)
+        onFailed(config.url, errMsg)
         setTotalCompletedAt(Date.now())
+        setSteps((prev) => {
+          let marked = false
+          const updated = prev.map((s) => {
+            if (s.status === 'running' || s.status === 'retrying') {
+              marked = true
+              return { ...s, status: 'error' as StepStatus, detail: errMsg, completedAt: Date.now() }
+            }
+            return s
+          })
+          if (!marked) {
+            return updated.map((s) => {
+              if (!marked && s.status === 'pending') {
+                marked = true
+                return { ...s, status: 'error' as StepStatus, detail: errMsg, startedAt: s.startedAt || Date.now(), completedAt: Date.now() }
+              }
+              return s
+            })
+          }
+          return updated
+        })
       }
     } finally {
       if (abortControllerRef.current === controller) {

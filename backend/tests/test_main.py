@@ -279,3 +279,159 @@ async def test_extract_structured_error_logging(mock_verify_owner):
     call_args = mock_log.call_args[0]
     assert call_args[0] == "https://www.youtube.com/watch?v=abc123xyz99"
     assert call_args[1] == "metadata_fetch"
+
+
+def _parse_sse_events(response_text: str) -> list[dict]:
+    import json
+    events = []
+    for line in response_text.splitlines():
+        if line.startswith("data: "):
+            events.append(json.loads(line[6:]))
+    return events
+
+
+@pytest.mark.asyncio
+async def test_extract_stream_transcript_unavailable(mock_verify_owner):
+    """Test extract_stream yields SSE error event and terminates when transcript is unavailable."""
+    parsed = ParsedURL(video_id="abc123xyz99", canonical_url="https://www.youtube.com/watch?v=abc123xyz99")
+    metadata = VideoMetadata(channel_name="Financial Education", published_at="2024-01-15T10:30:00Z")
+
+    with (
+        patch("app.main.parse_url", return_value=parsed),
+        patch("app.main.check_duplicate", new_callable=AsyncMock, return_value=False),
+        patch("app.main.fetch_metadata", new_callable=AsyncMock, return_value=metadata),
+        patch("app.main.get_cached_transcript", new_callable=AsyncMock, return_value=None),
+        patch(
+            "app.main.fetch_transcript",
+            new_callable=AsyncMock,
+            side_effect=HTTPException(status_code=422, detail="TRANSCRIPT_UNAVAILABLE: No captions available for video"),
+        ) as mock_trans,
+        patch("app.main.parse_recommendations", new_callable=AsyncMock) as mock_llm,
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/extract/stream",
+                json={"youtube_url": "https://www.youtube.com/watch?v=abc123xyz99"},
+            )
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert len(events) >= 1
+
+    # Check transcript events
+    running_trans = [e for e in events if e.get("step") == "transcript" and e.get("status") == "running"]
+    assert any("Fetching transcript..." in e.get("detail", "") for e in running_trans)
+
+    last_event = events[-1]
+    assert last_event["step"] == "transcript"
+    assert last_event["status"] == "error"
+    assert "TRANSCRIPT_UNAVAILABLE" in last_event["detail"]
+    assert last_event["needs_manual"] is True
+    assert last_event["video_id"] == "abc123xyz99"
+
+    mock_trans.assert_called_once_with("abc123xyz99")
+    mock_llm.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extract_stream_success_continues_to_llm(mock_verify_owner):
+    """Test extract_stream where fetch_transcript returns text continues to LLM and completes."""
+    parsed = ParsedURL(video_id="abc123xyz99", canonical_url="https://www.youtube.com/watch?v=abc123xyz99")
+    metadata = VideoMetadata(channel_name="Financial Education", published_at="2024-01-15T10:30:00Z")
+    recommendations = [
+        Recommendation(
+            ticker="AAPL",
+            sentiment=2,
+            target_price=200.0,
+            conviction_level=8,
+            catalyst_notes="Strong sales",
+        )
+    ]
+
+    with (
+        patch("app.main.parse_url", return_value=parsed),
+        patch("app.main.check_duplicate", new_callable=AsyncMock, return_value=False),
+        patch("app.main.fetch_metadata", new_callable=AsyncMock, return_value=metadata),
+        patch("app.main.get_cached_transcript", new_callable=AsyncMock, return_value=None),
+        patch(
+            "app.main.fetch_transcript",
+            new_callable=AsyncMock,
+            return_value="Valid transcript with more than fifty characters to satisfy minimum length requirement",
+        ) as mock_trans,
+        patch(
+            "app.main.parse_recommendations",
+            new_callable=AsyncMock,
+            return_value=(recommendations, "Summary of video"),
+        ) as mock_llm,
+        patch("app.main.fetch_channel_thumbnail", new_callable=AsyncMock, return_value=None),
+        patch("app.main.save_transcript_cache", new_callable=AsyncMock) as mock_cache,
+        patch(
+            "app.main.persist_extraction",
+            new_callable=AsyncMock,
+            return_value={"channel_id": "cid1", "video_id": "vid1"},
+        ),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/extract/stream",
+                json={"youtube_url": "https://www.youtube.com/watch?v=abc123xyz99"},
+            )
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    mock_trans.assert_called_once_with("abc123xyz99")
+    mock_llm.assert_called_once()
+    mock_cache.assert_called_once()
+
+    steps_seen = [e["step"] for e in events]
+    assert "transcript" in steps_seen
+    assert "llm_parse" in steps_seen
+    assert "database" in steps_seen
+    assert "complete" in steps_seen
+
+    last_event = events[-1]
+    assert last_event["step"] == "complete"
+    assert last_event["status"] == "done"
+    assert last_event["result"]["recommendation_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_extract_stream_no_exception_escapes_generator(mock_verify_owner):
+    """Test that unexpected exceptions in the pipeline do not escape and yield a terminal error event."""
+    parsed = ParsedURL(video_id="abc123xyz99", canonical_url="https://www.youtube.com/watch?v=abc123xyz99")
+
+    with (
+        patch("app.main.parse_url", return_value=parsed),
+        patch("app.main.check_duplicate", new_callable=AsyncMock, side_effect=TypeError("simulated unexpected failure")),
+        patch("app.main._log_pipeline_error") as mock_log,
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/extract/stream",
+                json={"youtube_url": "https://www.youtube.com/watch?v=abc123xyz99"},
+            )
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    assert len(events) >= 1
+    last_event = events[-1]
+    assert last_event["status"] == "error"
+    assert "simulated unexpected failure" in last_event["detail"]
+    mock_log.assert_called()
+
+
+def test_extract_stream_regression_no_private_transcript_helpers():
+    """Regression test: verify extract_stream does not reference private transcript helpers directly."""
+    import inspect
+    from app.main import extract_stream
+
+    source = inspect.getsource(extract_stream)
+    assert "_fetch_via_worker" not in source, "extract_stream must not call _fetch_via_worker directly"
+    assert "_fetch_transcript_ytdlp" not in source, "extract_stream must not call _fetch_transcript_ytdlp directly"
+    assert "_fetch_with_retry" not in source, "extract_stream must not call _fetch_with_retry directly"

@@ -149,6 +149,56 @@ async def debug_transcript(
             "proxy_enabled": PROXY_ENABLED,
         }
 
+    # Test home runner (second egress, residential IP via Cloudflare Tunnel)
+    from app.transcript import (
+        HOME_RUNNER_URL,
+        _fetch_via_home_runner,
+        _home_runner_circuit_open_until,
+    )
+    import time as _time
+
+    runner_started = _time.monotonic()
+    circuit_open = _time.monotonic() < _home_runner_circuit_open_until
+    results["home_runner"] = {
+        "configured": bool(HOME_RUNNER_URL),
+        "url": HOME_RUNNER_URL,
+        "circuit_open": circuit_open,
+    }
+    if HOME_RUNNER_URL:
+        runner_attempts: list = []
+        try:
+            runner_text = await _fetch_via_home_runner(
+                video_id,
+                deadline=_time.monotonic() + 8.0,
+                attempts=runner_attempts,
+            )
+            results["home_runner"].update(
+                {
+                    "success": bool(runner_text),
+                    "length": len(runner_text or ""),
+                    "duration_ms": int((_time.monotonic() - runner_started) * 1000),
+                    "attempts": [
+                        {
+                            "stage": record.stage,
+                            "status": record.http_status,
+                            "error_class": record.error_class,
+                        }
+                        for record in runner_attempts
+                    ],
+                }
+            )
+        except Exception as e:
+            results["home_runner"].update(
+                {
+                    "success": False,
+                    "error": f"{type(e).__name__}: {str(e)[:300]}",
+                    "duration_ms": int((_time.monotonic() - runner_started) * 1000),
+                }
+            )
+    else:
+        results["home_runner"]["success"] = False
+        results["home_runner"]["error"] = "Not configured"
+
     return results
 
 

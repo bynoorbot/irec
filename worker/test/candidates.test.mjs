@@ -7,6 +7,9 @@ import {
   parseTranscriptBody,
   fetchTranscriptFromTrack,
   classifyAttemptsError,
+  classifyPlayability,
+  getCaptionTracks,
+  getTranscript,
 } from '../src/index.js';
 
 describe('Candidate URLs', () => {
@@ -58,17 +61,94 @@ describe('Candidate URLs', () => {
   });
 });
 
+describe('classifyPlayability', () => {
+  test('maps LOGIN_REQUIRED with bot-confirm reason to UPSTREAM_BOTWALL (502)', () => {
+    const playability = {
+      status: 'LOGIN_REQUIRED',
+      reason: 'Sign in to confirm you are not a bot',
+    };
+    const err = classifyPlayability(playability);
+    assert.equal(err.status, 502);
+    assert.equal(err.error_code, 'UPSTREAM_BOTWALL');
+    assert.equal(err.stage, 'player');
+  });
+
+  test('maps LOGIN_REQUIRED with sign-in-to-confirm reason to UPSTREAM_BOTWALL (502)', () => {
+    const playability = {
+      status: 'LOGIN_REQUIRED',
+      messages: ['Please sign in to confirm your identity'],
+    };
+    const err = classifyPlayability(playability);
+    assert.equal(err.status, 502);
+    assert.equal(err.error_code, 'UPSTREAM_BOTWALL');
+  });
+
+  test('maps bot-wall reason containing substring "age" to UPSTREAM_BOTWALL (502)', () => {
+    const playability = {
+      status: 'LOGIN_REQUIRED',
+      reason: 'Sign in to confirm you are not a bot (message page check)',
+    };
+    const err = classifyPlayability(playability);
+    assert.equal(err.status, 502);
+    assert.equal(err.error_code, 'UPSTREAM_BOTWALL');
+  });
+
+  test('maps unknown LOGIN_REQUIRED reason to UPSTREAM_BOTWALL (502)', () => {
+    const playability = {
+      status: 'LOGIN_REQUIRED',
+      reason: 'Unexpected challenge or unknown login wall',
+    };
+    const err = classifyPlayability(playability);
+    assert.equal(err.status, 502);
+    assert.equal(err.error_code, 'UPSTREAM_BOTWALL');
+    assert.equal(err.stage, 'player');
+  });
+
+  test('maps LOGIN_REQUIRED with age-restricted reason to NO_CAPTIONS_AGE (422)', () => {
+    const playability = {
+      status: 'LOGIN_REQUIRED',
+      reason: 'This video may be inappropriate for some users. Sign in to confirm your age.',
+    };
+    const err = classifyPlayability(playability);
+    assert.equal(err.status, 422);
+    assert.equal(err.error_code, 'NO_CAPTIONS_AGE');
+    assert.equal(err.stage, 'player');
+  });
+
+  test('maps unavailable video with ERROR status to NO_CAPTIONS (422, terminal)', () => {
+    const unavailable = {
+      status: 'ERROR',
+      reason: 'Video unavailable',
+    };
+    const err = classifyPlayability(unavailable);
+    assert.equal(err.status, 422);
+    assert.equal(err.error_code, 'NO_CAPTIONS');
+  });
+
+  test('returns null for status OK', () => {
+    assert.equal(classifyPlayability({ status: 'OK' }), null);
+  });
+});
+
 describe('classifyAttemptsError', () => {
-  test('all-200-empty case yields NO_CAPTIONS (422)', () => {
+  test('tracks-exist-but-all-empty yields UPSTREAM_EMPTY (502)', () => {
     const attempts = [
       { url_kind: 'verbatim', status: 200, bytes: 0 },
       { url_kind: 'verbatim+fmt=json3', status: 200, bytes: 0 },
     ];
-    const err = classifyAttemptsError(attempts, 'en');
+    const err = classifyAttemptsError(attempts, 'en', true);
+    assert.equal(err.status, 502);
+    assert.equal(err.error_code, 'UPSTREAM_EMPTY');
+    assert.equal(err.stage, 'timedtext');
+    assert.equal(err.lang, 'en');
+  });
+
+  test('no-tracks yields NO_CAPTIONS (422)', () => {
+    const attempts = [];
+    const err = classifyAttemptsError(attempts, 'en', false);
     assert.equal(err.status, 422);
     assert.equal(err.error_code, 'NO_CAPTIONS');
     assert.equal(err.stage, 'timedtext');
-    assert.equal(err.lang, 'en');
   });
 
   test('all-404 case yields UPSTREAM_404 (502) using first status', () => {
@@ -76,22 +156,21 @@ describe('classifyAttemptsError', () => {
       { url_kind: 'verbatim', status: 404, bytes: 50 },
       { url_kind: 'verbatim+fmt=json3', status: 404, bytes: 50 },
     ];
-    const err = classifyAttemptsError(attempts, 'en');
+    const err = classifyAttemptsError(attempts, 'en', true);
     assert.equal(err.status, 502);
     assert.equal(err.error_code, 'UPSTREAM_404');
     assert.equal(err.stage, 'timedtext');
     assert.equal(err.lang, 'en');
   });
 
-  test('mixed 200-empty and 404 yields NO_CAPTIONS (422) instead of UPSTREAM_404', () => {
-    // Crucial test: candidate 1 returns 200 empty, last candidate returns 404
+  test('mixed 200-empty and 404 yields UPSTREAM_EMPTY (502)', () => {
     const attempts = [
       { url_kind: 'verbatim', status: 200, bytes: 0 },
       { url_kind: 'exp-stripped', status: 404, bytes: 15 },
     ];
-    const err = classifyAttemptsError(attempts, 'en');
-    assert.equal(err.status, 422);
-    assert.equal(err.error_code, 'NO_CAPTIONS');
+    const err = classifyAttemptsError(attempts, 'en', true);
+    assert.equal(err.status, 502);
+    assert.equal(err.error_code, 'UPSTREAM_EMPTY');
   });
 
   test('mixed status-0 and 404 yields UPSTREAM_NETWORK (502)', () => {
@@ -100,7 +179,7 @@ describe('classifyAttemptsError', () => {
       { url_kind: 'verbatim', status: 0, bytes: 0 },
       { url_kind: 'exp-stripped', status: 404, bytes: 15 },
     ];
-    const err = classifyAttemptsError(attempts, 'en');
+    const err = classifyAttemptsError(attempts, 'en', true);
     assert.equal(err.status, 502);
     assert.equal(err.error_code, 'UPSTREAM_NETWORK');
     assert.equal(err.stage, 'timedtext');
@@ -118,7 +197,7 @@ describe('fetchTranscriptFromTrack', () => {
     const callLog = [];
     const mockFetch = async (url) => {
       callLog.push(url);
-      // First attempt (verbatim) returns 200 with empty body (the real-world bug)
+      // First attempt (verbatim) returns 200 with empty body
       if (callLog.length === 1) {
         return {
           ok: true,
@@ -158,7 +237,7 @@ describe('fetchTranscriptFromTrack', () => {
     assert.ok(result.attempts[2].bytes > 0);
   });
 
-  test('throws structured error 422 NO_CAPTIONS when all candidates return empty body', async () => {
+  test('throws structured error 502 UPSTREAM_EMPTY when all candidates return empty body', async () => {
     const track = {
       baseUrl: 'https://www.youtube.com/api/timedtext?v=test1234567',
       languageCode: 'en',
@@ -178,8 +257,8 @@ describe('fetchTranscriptFromTrack', () => {
         });
       },
       (err) => {
-        assert.equal(err.status, 422);
-        assert.equal(err.error_code, 'NO_CAPTIONS');
+        assert.equal(err.status, 502);
+        assert.equal(err.error_code, 'UPSTREAM_EMPTY');
         assert.equal(err.stage, 'timedtext');
         assert.equal(err.lang, 'en');
         assert.ok(Array.isArray(err.attempts));
@@ -215,6 +294,246 @@ describe('fetchTranscriptFromTrack', () => {
         return true;
       }
     );
+  });
+});
+
+describe('getCaptionTracks', () => {
+  test('retries player call up to 2 times on UPSTREAM_BOTWALL with jittered backoff then fails', async () => {
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          playabilityStatus: {
+            status: 'LOGIN_REQUIRED',
+            reason: 'Sign in to confirm you are not a bot',
+          },
+        }),
+      };
+    };
+
+    await assert.rejects(
+      async () => {
+        await getCaptionTracks('botwall1234', 'testkey', Date.now() + 10000, mockFetch);
+      },
+      (err) => {
+        assert.equal(err.status, 502);
+        assert.equal(err.error_code, 'UPSTREAM_BOTWALL');
+        assert.equal(err.stage, 'player');
+        return true;
+      }
+    );
+
+    // Initial attempt + 2 retries = 3 calls
+    assert.equal(callCount, 3);
+  });
+
+  test('player call retry succeeds after transient botwall', async () => {
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      if (callCount === 1) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            playabilityStatus: {
+              status: 'LOGIN_REQUIRED',
+              reason: 'Sign in to confirm you are not a bot',
+            },
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          playabilityStatus: { status: 'OK' },
+          captions: {
+            playerCaptionsTracklistRenderer: {
+              captionTracks: [{ languageCode: 'en', baseUrl: 'https://timedtext.test' }],
+            },
+          },
+        }),
+      };
+    };
+
+    const res = await getCaptionTracks('botwall1234', 'testkey', Date.now() + 10000, mockFetch);
+    assert.equal(callCount, 2);
+    assert.equal(res.tracks.length, 1);
+  });
+
+  test('player call with terminal NO_CAPTIONS does not retry', async () => {
+    let callCount = 0;
+    const mockFetch = async () => {
+      callCount++;
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          playabilityStatus: {
+            status: 'ERROR',
+            reason: 'Video unavailable',
+          },
+        }),
+      };
+    };
+
+    await assert.rejects(
+      async () => {
+        await getCaptionTracks('unavail1234', 'testkey', Date.now() + 10000, mockFetch);
+      },
+      (err) => {
+        assert.equal(err.status, 422);
+        assert.equal(err.error_code, 'NO_CAPTIONS');
+        return true;
+      }
+    );
+
+    assert.equal(callCount, 1);
+  });
+});
+
+describe('getTranscript retry behavior', () => {
+  test('all-empty candidate ladder retries once and succeeds', async () => {
+    let playerCalls = 0;
+    let timedtextCalls = 0;
+
+    const mockFetch = async (url) => {
+      if (url.includes('player')) {
+        playerCalls++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            playabilityStatus: { status: 'OK' },
+            captions: {
+              playerCaptionsTracklistRenderer: {
+                captionTracks: [{ languageCode: 'en', baseUrl: `https://timedtext.test?attempt=${playerCalls}` }],
+              },
+            },
+          }),
+        };
+      }
+
+      timedtextCalls++;
+      // On first player call, all timedtext candidates return 200 empty
+      if (playerCalls === 1) {
+        return {
+          ok: true,
+          status: 200,
+          text: async () => '',
+        };
+      }
+
+      // On retry player call, timedtext candidate succeeds
+      return {
+        ok: true,
+        status: 200,
+        text: async () => '<p><s>Retried</s> <s>transcript</s> <s>success</s></p>',
+      };
+    };
+
+    const res = await getTranscript('test1234567', {
+      fetch: mockFetch,
+      deadline: Date.now() + 10000,
+    });
+
+    assert.equal(res.transcript, 'Retried transcript success');
+    assert.equal(playerCalls, 2);
+  });
+
+  test('all-empty candidate ladder retries at most once then fails with UPSTREAM_EMPTY', async () => {
+    let playerCalls = 0;
+
+    const mockFetch = async (url) => {
+      if (url.includes('player')) {
+        playerCalls++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            playabilityStatus: { status: 'OK' },
+            captions: {
+              playerCaptionsTracklistRenderer: {
+                captionTracks: [{ languageCode: 'en', baseUrl: `https://timedtext.test?attempt=${playerCalls}` }],
+              },
+            },
+          }),
+        };
+      }
+
+      // All candidate fetches return 200 with empty body
+      return {
+        ok: true,
+        status: 200,
+        text: async () => '',
+      };
+    };
+
+    await assert.rejects(
+      async () => {
+        await getTranscript('test1234567', {
+          fetch: mockFetch,
+          deadline: Date.now() + 10000,
+        });
+      },
+      (err) => {
+        assert.equal(err.status, 502);
+        assert.equal(err.error_code, 'UPSTREAM_EMPTY');
+        return true;
+      }
+    );
+
+    // Initial flow + 1 retry = exactly 2 player calls
+    assert.equal(playerCalls, 2);
+  });
+
+  test('non-empty failure (e.g. 404) does NOT retry getTranscript whole flow', async () => {
+    let playerCalls = 0;
+
+    const mockFetch = async (url) => {
+      if (url.includes('player')) {
+        playerCalls++;
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            playabilityStatus: { status: 'OK' },
+            captions: {
+              playerCaptionsTracklistRenderer: {
+                captionTracks: [{ languageCode: 'en', baseUrl: 'https://timedtext.test' }],
+              },
+            },
+          }),
+        };
+      }
+
+      return {
+        ok: false,
+        status: 404,
+        text: async () => 'Not Found',
+      };
+    };
+
+    await assert.rejects(
+      async () => {
+        await getTranscript('test1234567', {
+          fetch: mockFetch,
+          deadline: Date.now() + 10000,
+        });
+      },
+      (err) => {
+        assert.equal(err.status, 502);
+        assert.equal(err.error_code, 'UPSTREAM_404');
+        return true;
+      }
+    );
+
+    // Exactly 1 player call (no whole-flow retry for 404)
+    assert.equal(playerCalls, 1);
   });
 });
 

@@ -1,0 +1,115 @@
+name: Configure Cloudflare Variables and Secrets
+
+on:
+  workflow_dispatch:
+
+jobs:
+  configure:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Configure Cloudflare
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          SUPABASE_URL: ${{ vars.NEXT_PUBLIC_SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ vars.NEXT_PUBLIC_SUPABASE_ANON_KEY }}
+          BACKEND_URL: ${{ vars.NEXT_PUBLIC_BACKEND_URL }}
+          OWNER_EMAIL: ${{ vars.NEXT_PUBLIC_OWNER_EMAIL }}
+        run: |
+          set -e
+          echo "Listing Cloudflare Accounts..."
+          ACCOUNTS_RES=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json")
+
+          ACCOUNT_ID=$(echo "$ACCOUNTS_RES" | jq -r '.result[0].id // empty')
+          if [ -z "$ACCOUNT_ID" ]; then
+            echo "::error::Could not find Cloudflare Account ID: $ACCOUNTS_RES"
+            exit 1
+          fi
+          echo "Using Cloudflare Account: $ACCOUNT_ID"
+
+          # 1. Check for Workers Builds triggers (aura)
+          echo "Checking Workers scripts..."
+          SCRIPTS_RES=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json")
+
+          WORKER_TAG=$(echo "$SCRIPTS_RES" | jq -r '.result[] | select(.id=="aura") | .tag // empty')
+          echo "Worker aura tag: $WORKER_TAG"
+
+          if [ -n "$WORKER_TAG" ]; then
+            echo "Fetching Workers Builds triggers for aura..."
+            TRIGGERS_RES=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/builds/workers/$WORKER_TAG/triggers" \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              -H "Content-Type: application/json")
+
+            TRIGGER_IDS=$(echo "$TRIGGERS_RES" | jq -r '.result[].uuid // empty')
+            if [ -n "$TRIGGER_IDS" ]; then
+              for TID in $TRIGGER_IDS; do
+                echo "Configuring build variables on trigger: $TID"
+                curl -s -X PATCH "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/builds/triggers/$TID/environment_variables" \
+                  -H "Authorization: Bearer $CF_TOKEN" \
+                  -H "Content-Type: application/json" \
+                  -d "{
+                    \"NEXT_PUBLIC_SUPABASE_URL\": {\"value\": \"$SUPABASE_URL\", \"is_secret\": false},
+                    \"NEXT_PUBLIC_SUPABASE_ANON_KEY\": {\"value\": \"$SUPABASE_ANON_KEY\", \"is_secret\": true},
+                    \"NEXT_PUBLIC_BACKEND_URL\": {\"value\": \"$BACKEND_URL\", \"is_secret\": false},
+                    \"NEXT_PUBLIC_OWNER_EMAIL\": {\"value\": \"$OWNER_EMAIL\", \"is_secret\": false}
+                  }" | jq -c '{success: .success, errors: .errors}'
+              done
+            else
+              echo "No Workers Builds triggers found yet for aura."
+            fi
+
+            echo "Setting Worker script secrets/vars for aura..."
+            for VAR_NAME in "NEXT_PUBLIC_SUPABASE_URL" "NEXT_PUBLIC_BACKEND_URL" "NEXT_PUBLIC_OWNER_EMAIL"; do
+              VAR_VAL=""
+              case "$VAR_NAME" in
+                "NEXT_PUBLIC_SUPABASE_URL") VAR_VAL="$SUPABASE_URL" ;;
+                "NEXT_PUBLIC_BACKEND_URL") VAR_VAL="$BACKEND_URL" ;;
+                "NEXT_PUBLIC_OWNER_EMAIL") VAR_VAL="$OWNER_EMAIL" ;;
+              esac
+              curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/aura/secrets" \
+                -H "Authorization: Bearer $CF_TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{\"name\": \"$VAR_NAME\", \"text\": \"$VAR_VAL\", \"type\": \"secret_text\"}" | jq -c '{name: "'"$VAR_NAME"'", success: .success}'
+            done
+            curl -s -X PUT "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts/aura/secrets" \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{\"name\": \"NEXT_PUBLIC_SUPABASE_ANON_KEY\", \"text\": \"$SUPABASE_ANON_KEY\", \"type\": \"secret_text\"}" | jq -c '{name: "NEXT_PUBLIC_SUPABASE_ANON_KEY", success: .success}'
+          fi
+
+          # 2. Check for Cloudflare Pages project (in case aura is registered as a Pages project)
+          PAGES_RES=$(curl -s -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects/aura" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json")
+          PAGES_NAME=$(echo "$PAGES_RES" | jq -r '.result.name // empty')
+          if [ -n "$PAGES_NAME" ]; then
+            echo "Found Pages project aura, setting environment variables..."
+            curl -s -X PATCH "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/pages/projects/aura" \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{
+                \"deployment_configs\": {
+                  \"production\": {
+                    \"env_vars\": {
+                      \"NEXT_PUBLIC_SUPABASE_URL\": {\"value\": \"$SUPABASE_URL\", \"type\": \"plain_text\"},
+                      \"NEXT_PUBLIC_SUPABASE_ANON_KEY\": {\"value\": \"$SUPABASE_ANON_KEY\", \"type\": \"secret_text\"},
+                      \"NEXT_PUBLIC_BACKEND_URL\": {\"value\": \"$BACKEND_URL\", \"type\": \"plain_text\"},
+                      \"NEXT_PUBLIC_OWNER_EMAIL\": {\"value\": \"$OWNER_EMAIL\", \"type\": \"plain_text\"}
+                    }
+                  },
+                  \"preview\": {
+                    \"env_vars\": {
+                      \"NEXT_PUBLIC_SUPABASE_URL\": {\"value\": \"$SUPABASE_URL\", \"type\": \"plain_text\"},
+                      \"NEXT_PUBLIC_SUPABASE_ANON_KEY\": {\"value\": \"$SUPABASE_ANON_KEY\", \"type\": \"secret_text\"},
+                      \"NEXT_PUBLIC_BACKEND_URL\": {\"value\": \"$BACKEND_URL\", \"type\": \"plain_text\"},
+                      \"NEXT_PUBLIC_OWNER_EMAIL\": {\"value\": \"$OWNER_EMAIL\", \"type\": \"plain_text\"}
+                    }
+                  }
+                }
+              }" | jq -c '{pages_updated: .success, errors: .errors}'
+          fi
+
+          echo "Completed configuring Cloudflare variables and secrets!"

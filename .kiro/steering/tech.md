@@ -33,7 +33,7 @@
 - **Backend hosting**: Google Cloud Run
 - **Backend URL**: `https://irec-backend-f5xyrqhyjq-uc.a.run.app`
 - **Transcript Worker**: Cloudflare Worker (`https://yt-transcript-proxy.abukhleif94.workers.dev`)
-- **Frontend hosting**: Static (GitHub Pages via CNAME)
+- **Frontend hosting**: Cloudflare Workers with Static Assets (`frontend/wrangler.jsonc`, custom domain `aura.bynoor.io`)
 - **CI/CD**: GitHub Actions (deploy-backend.yml, deploy-frontend.yml, deploy-worker.yml)
 - **Cloud Storage & CLI Policy**: Always use `gcloud storage` commands for any bucket or artifact operations. Do NOT use legacy `gsutil` CLI (deprecated by Google, removed from default CLI bundles after March 2027).
 
@@ -57,6 +57,8 @@ cd frontend
 npm install
 npm run dev          # dev server (localhost:3000)
 npm run build        # production build (static export)
+npm run preview      # local preview with wrangler dev
+npm run deploy       # deploy to Cloudflare Workers
 npm run lint         # ESLint
 ```
 

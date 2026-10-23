@@ -338,7 +338,7 @@ export default function ExplorePage() {
       <div className="fixed inset-0 pointer-events-none z-0 opacity-[0.015] mix-blend-overlay" style={{ backgroundImage: `url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)'/%3E%3C/svg%3E")` }} />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-[#141B2D]/40 via-[#0A0F1A] to-[#0A0F1A] pointer-events-none z-0" />
 
-      <div className={`relative z-10 mx-auto px-4 sm:px-8 py-8 md:py-12 w-full max-w-[1400px] flex-1 flex flex-col animate-fade-up transition-all duration-300 ${quickPeekStock ? 'lg:pr-[380px]' : ''}`}>
+      <div className="relative z-10 mx-auto px-4 sm:px-8 py-8 md:py-12 w-full max-w-[1400px] flex-1 flex flex-col animate-fade-up transition-all duration-300">
         {/* Header */}
         <div className="mb-8">
           <div className="flex items-center justify-between flex-wrap gap-4 mb-4">
@@ -476,7 +476,7 @@ export default function ExplorePage() {
           <div className="flex-1 min-w-0 w-full">
             {/* Desktop Unified Table */}
             <div className="hidden lg:block rounded-2xl border border-[#1E293B] bg-[#0A0F1A]/60 backdrop-blur-md overflow-hidden animate-fade-up">
-              <div className="overflow-x-auto">
+              <div className={`overflow-x-auto table-scroll-container ${quickPeekStock ? 'table-compact' : ''}`}>
                 <table className="w-full text-left">
                   <thead>
                     <tr className="border-b border-[#1E293B] bg-[#141B2D]/40">

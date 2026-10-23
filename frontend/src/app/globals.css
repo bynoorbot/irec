@@ -729,4 +729,59 @@
   .hide-scrollbar::-webkit-scrollbar {
     display: none;
   }
+  .table-scroll-container {
+    scrollbar-width: thin;
+    scrollbar-color: #334155 transparent;
+  }
+  .table-scroll-container::-webkit-scrollbar {
+    height: 6px;
+  }
+  .table-scroll-container::-webkit-scrollbar-track {
+    background: rgba(20, 27, 45, 0.4);
+    border-radius: 9999px;
+  }
+  .table-scroll-container::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 9999px;
+  }
+  .table-scroll-container::-webkit-scrollbar-thumb:hover {
+    background: #00D4AA;
+  }
+
+  /* Compact mode when quick peek pane is open on desktop */
+  .table-scroll-container.table-compact table {
+    table-layout: auto;
+    width: 100%;
+  }
+  .table-scroll-container.table-compact th,
+  .table-scroll-container.table-compact td {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+    padding-top: 0.75rem !important;
+    padding-bottom: 0.75rem !important;
+  }
+  .table-scroll-container.table-compact td:first-child > div {
+    min-width: 0 !important;
+  }
+  .table-scroll-container.table-compact td:first-child span.truncate {
+    max-width: 70px !important;
+  }
+  .table-scroll-container.table-compact td:nth-child(3) > div {
+    min-width: 0 !important;
+  }
+  .table-scroll-container.table-compact td:nth-child(6) > div {
+    white-space: nowrap;
+  }
+  .table-scroll-container.table-compact td:nth-child(7) > div {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 80px;
+  }
+  .table-scroll-container.table-compact td:last-child button,
+  .table-scroll-container.table-compact td:last-child a {
+    padding-left: 0.5rem !important;
+    padding-right: 0.5rem !important;
+    font-size: 0.7rem !important;
+  }
 }

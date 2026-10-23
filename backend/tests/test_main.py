@@ -87,6 +87,14 @@ async def test_extract_success(mock_verify_owner, mock_pipeline):
     assert data["published_at"] == "2024-01-15T10:30:00Z"
     assert data["tickers_extracted"] == ["AAPL", "TSLA"]
     assert data["recommendation_count"] == 2
+    assert len(data["recommendations"]) == 2
+    assert data["recommendations"][0]["ticker"] == "AAPL"
+    assert data["recommendations"][0]["sentiment"] == 2
+    assert data["recommendations"][0]["conviction_level"] == 8
+    assert data["recommendations"][0]["target_price"] == 200.0
+    assert data["recommendations"][0]["catalyst_notes"] == "Strong iPhone sales expected"
+    assert data["recommendations"][1]["ticker"] == "TSLA"
+    assert data["recommendations"][1]["target_price"] is None
 
 
 @pytest.mark.asyncio
@@ -397,6 +405,80 @@ async def test_extract_stream_success_continues_to_llm(mock_verify_owner):
     assert last_event["step"] == "complete"
     assert last_event["status"] == "done"
     assert last_event["result"]["recommendation_count"] == 1
+    assert len(last_event["result"]["recommendations"]) == 1
+    assert last_event["result"]["recommendations"][0]["ticker"] == "AAPL"
+    assert last_event["result"]["recommendations"][0]["sentiment"] == 2
+    assert last_event["result"]["recommendations"][0]["conviction_level"] == 8
+    assert last_event["result"]["recommendations"][0]["target_price"] == 200.0
+
+
+@pytest.mark.asyncio
+async def test_extract_stream_reextract_includes_recommendations(mock_verify_owner):
+    """Test re-extract stream complete event carries per-stock recommendations."""
+    from unittest.mock import MagicMock
+
+    parsed = ParsedURL(video_id="abc123xyz99", canonical_url="https://www.youtube.com/watch?v=abc123xyz99")
+    metadata = VideoMetadata(channel_name="Financial Education", published_at="2024-01-15T10:30:00Z")
+    recommendations = [
+        Recommendation(
+            ticker="NVDA",
+            stock_name="NVIDIA",
+            sentiment=2,
+            target_price=250.0,
+            conviction_level=9,
+            catalyst_notes="GPU moat",
+        )
+    ]
+
+    # _get_client().table("channels").select(...).eq(...).single().execute()
+    ch_response = MagicMock()
+    ch_response.data = {"channel_id": "cid1"}
+    mock_client = MagicMock()
+    (
+        mock_client.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value
+    ) = ch_response
+
+    with (
+        patch("app.main.parse_url", return_value=parsed),
+        patch(
+            "app.main.get_video_for_reextract",
+            new_callable=AsyncMock,
+            return_value={"video_id": "uuid9", "transcript": "Valid transcript with more than fifty characters to satisfy minimum length requirement"},
+        ),
+        patch("app.main.fetch_metadata", new_callable=AsyncMock, return_value=metadata),
+        patch(
+            "app.main.parse_recommendations",
+            new_callable=AsyncMock,
+            return_value=(recommendations, "Summary of video"),
+        ),
+        patch("app.main.replace_recommendations", new_callable=AsyncMock),
+        patch("app.main._get_client", return_value=mock_client),
+    ):
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            response = await client.post(
+                "/api/v1/extract/stream",
+                json={
+                    "youtube_url": "https://www.youtube.com/watch?v=abc123xyz99",
+                    "reextract_only": True,
+                },
+            )
+
+    assert response.status_code == 200
+    events = _parse_sse_events(response.text)
+    last_event = events[-1]
+    assert last_event["step"] == "complete"
+    assert last_event["status"] == "done"
+    assert last_event["result"]["recommendation_count"] == 1
+    assert len(last_event["result"]["recommendations"]) == 1
+    rec = last_event["result"]["recommendations"][0]
+    assert rec["ticker"] == "NVDA"
+    assert rec["stock_name"] == "NVIDIA"
+    assert rec["sentiment"] == 2
+    assert rec["conviction_level"] == 9
+    assert rec["target_price"] == 250.0
+    assert rec["catalyst_notes"] == "GPU moat"
 
 
 @pytest.mark.asyncio

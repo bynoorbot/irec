@@ -42,6 +42,18 @@ class LLMResponse(BaseModel):
     recommendations: list[Recommendation]
 
 
+class RecommendationSummary(BaseModel):
+    """Lean per-stock payload for ingest results (SSE + non-stream)."""
+
+    ticker: str
+    stock_name: str = ""
+    sentiment: int = Field(..., ge=-2, le=2)
+    conviction_level: int = Field(..., ge=1, le=10)
+    conviction_score: float | None = None
+    target_price: float | None = None
+    catalyst_notes: str = ""
+
+
 class ExtractionResponse(BaseModel):
     status: str = "success"
     channel_name: str
@@ -49,6 +61,7 @@ class ExtractionResponse(BaseModel):
     published_at: str
     tickers_extracted: list[str]
     recommendation_count: int
+    recommendations: list[RecommendationSummary] = Field(default_factory=list)
 
 
 class ParsedURL(BaseModel):

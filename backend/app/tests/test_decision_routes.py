@@ -52,6 +52,20 @@ def test_decision_state_actions_persist_in_payload():
     assert state["etf_whitelist"] == ["ISDU"]
 
 
+def test_not_now_names_are_excluded_from_candidates():
+    """Regression: 'Not now' must park a name, not leave it in the buy list."""
+    from app.decision_routes import select_candidates
+
+    aura = {
+        "AAA": {"mentions_30d": 9, "conviction": 90},
+        "BBB": {"mentions_30d": 8, "conviction": 80},
+        "CCC": {"mentions_30d": 7, "conviction": 70},
+        "ISDU": {"mentions_30d": 6, "conviction": 60},
+    }
+    picked = select_candidates(aura, held={"CCC"}, never={"AAA"}, not_now={"BBB"})
+    assert picked == []
+
+
 def test_verdicts_and_sector_bands():
     assert verdict_for(11, held=False) == "Master List"
     assert verdict_for(9, held=True) == "Watch"

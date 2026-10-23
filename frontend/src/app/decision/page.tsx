@@ -97,7 +97,7 @@ export default function DecisionPage() {
       if (!res.ok) throw new Error(json.detail || 'Save failed. Try again.')
       setData(prev => prev ? {
         ...prev,
-        candidates: body.kind === 'never' ? prev.candidates.filter(c => c.ticker !== body.ticker) : prev.candidates,
+        candidates: (body.kind === 'never' || body.kind === 'not_now') ? prev.candidates.filter(c => c.ticker !== body.ticker) : prev.candidates,
         state: {
           never: json.never ?? prev.state.never,
           not_now: json.not_now ?? prev.state.not_now,
@@ -258,8 +258,13 @@ export default function DecisionPage() {
               ))}
               {data.state.never.length === 0 && <span className="text-sm text-[#7C8AA0]">Empty. Use “Never for me” on a candidate.</span>}
             </div>
-            <h3 className="mt-4 text-[13px] font-semibold text-[#CBD5E1]">Not now</h3>
-            <p className="mt-1 text-sm leading-6 text-[#94A3B8]">{data.state.not_now.map(n => n.ticker).join(', ') || 'Empty. Parked names can resurface when price or thesis changes.'}</p>
+            <h3 className="mt-4 text-[13px] font-semibold text-[#CBD5E1]">Not now (parked)</h3>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {data.state.not_now.map(n => (
+                <button key={n.ticker} onClick={() => post('/api/v1/decision/dismiss', { ticker: n.ticker, kind: 'clear' }, n.ticker, `${n.ticker} un-parked. Refresh to see it in candidates again.`)} title="Un-park this name" aria-label={`Un-park ${n.ticker}`} className="rounded-full border border-[#2A364D] px-2.5 py-1 font-mono text-xs text-[#CBD5E1] hover:border-[#94A3B8] focus-visible:outline-2 focus-visible:outline-[#00D4AA]">{n.ticker} ×</button>
+              ))}
+              {data.state.not_now.length === 0 && <span className="text-sm text-[#7C8AA0]">Empty. Parked names stay out of candidates until you un-park them.</span>}
+            </div>
             <h3 className="mt-4 text-[13px] font-semibold text-[#CBD5E1]">Approved Shariah ETFs (Ireland)</h3>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {data.state.etf_whitelist.map(t => (

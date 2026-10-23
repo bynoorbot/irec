@@ -166,6 +166,12 @@ def verdict_for(score: int, held: bool) -> str:
     return "Reject" if not held else "Probation"
 
 
+def select_candidates(aura: Dict[str, Dict[str, Any]], held: set, never: set, not_now: set, limit: int = 12) -> List[str]:
+    """Idea-feed candidates: exclude held, Never, Not-now (parked), and ETFs."""
+    ranked = sorted(aura.items(), key=lambda kv: ((kv[1].get("mentions_30d") or 0), (kv[1].get("conviction") or 0)), reverse=True)
+    return [t for t, _a in ranked if t not in held and t not in never and t not in not_now and t not in KNOWN_ETFS][:limit]
+
+
 def sector_verdict(score: float) -> str:
     return "Hot" if score >= 7 else ("Neutral" if score >= 4.5 else "Ignore")
 
@@ -378,8 +384,8 @@ async def get_decision(authorization: str = Header(None), _owner: str = Depends(
 
     aura = aura_aggregates()
     held_set = {p["ticker"] for p in holdings_raw}
-    cand_tickers = [t for t, a in sorted(aura.items(), key=lambda kv: ((kv[1]["mentions_30d"] or 0), (kv[1]["conviction"] or 0)), reverse=True)
-                    if t not in held_set and t not in never and t not in KNOWN_ETFS][:12]
+    not_now = {n["ticker"] for n in state.get("not_now", [])}
+    cand_tickers = select_candidates(aura, held_set, never, not_now)
     fund = fetch_fundamentals(sorted(held_set) + cand_tickers)
 
     def build(ticker: str, held_row: Optional[dict]) -> Dict[str, Any]:

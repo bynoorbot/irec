@@ -18,7 +18,7 @@ from app.auth import verify_owner
 from app.database import check_duplicate, get_cached_transcript, persist_extraction, save_transcript_cache, delete_existing_video, get_video_for_reextract, replace_recommendations, save_llm_response, _get_client
 from app.llm_parser import parse_recommendations, LLMParseError
 from app.metadata import fetch_metadata, fetch_channel_thumbnail
-from app.schemas import ExtractionRequest, ExtractionResponse
+from app.schemas import ExtractionRequest, ExtractionResponse, RecommendationSummary
 from app.transcript import fetch_transcript, TRANSCRIPT_WORKER_URL
 from app.url_parser import parse_url
 
@@ -53,6 +53,22 @@ app.include_router(admin_router)
 app.include_router(today_router)
 app.include_router(stocks_router)
 app.include_router(portfolio_router)
+
+
+def _summarize_recommendations(recommendations: list) -> list[dict]:
+    """Build the lean per-stock payload embedded in ingest results."""
+    return [
+        RecommendationSummary(
+            ticker=rec.ticker,
+            stock_name=rec.stock_name or "",
+            sentiment=rec.sentiment,
+            conviction_level=rec.conviction_level,
+            conviction_score=rec.conviction_score,
+            target_price=rec.target_price,
+            catalyst_notes=rec.catalyst_notes or "",
+        ).model_dump()
+        for rec in recommendations
+    ]
 
 
 def _log_pipeline_error(
@@ -321,6 +337,18 @@ async def extract(
         published_at=metadata.published_at,
         tickers_extracted=[rec.ticker for rec in recommendations],
         recommendation_count=len(recommendations),
+        recommendations=[
+            RecommendationSummary(
+                ticker=rec.ticker,
+                stock_name=rec.stock_name or "",
+                sentiment=rec.sentiment,
+                conviction_level=rec.conviction_level,
+                conviction_score=rec.conviction_score,
+                target_price=rec.target_price,
+                catalyst_notes=rec.catalyst_notes or "",
+            )
+            for rec in recommendations
+        ],
     )
 
 
@@ -480,6 +508,7 @@ async def extract_stream(
                         "published_at": metadata.published_at,
                         "tickers_extracted": tickers,
                         "recommendation_count": len(recommendations),
+                        "recommendations": _summarize_recommendations(recommendations),
                         "video_summary": video_summary,
                         "calibration_failed": any(rec.conviction_confidence is None for rec in recommendations) if recommendations else False,
                     },
@@ -667,6 +696,7 @@ async def extract_stream(
                     "published_at": metadata.published_at,
                     "tickers_extracted": tickers,
                     "recommendation_count": len(recommendations),
+                    "recommendations": _summarize_recommendations(recommendations),
                     "video_summary": video_summary,
                     "calibration_failed": any(rec.conviction_confidence is None for rec in recommendations) if recommendations else False,
                 },

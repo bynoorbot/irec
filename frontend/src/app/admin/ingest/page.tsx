@@ -67,6 +67,16 @@ interface PipelineStep {
   completedAt?: number
 }
 
+interface IngestRecommendation {
+  ticker: string
+  stock_name?: string | null
+  sentiment: number
+  conviction_level: number
+  conviction_score?: number | null
+  target_price?: number | null
+  catalyst_notes?: string | null
+}
+
 interface ExtractionResult {
   channel_name: string
   channel_id?: string | null
@@ -75,8 +85,23 @@ interface ExtractionResult {
   published_at: string
   tickers_extracted: string[]
   recommendation_count: number
+  recommendations?: IngestRecommendation[]
   video_summary?: string | null
   calibration_failed?: boolean
+}
+
+function sentimentMeta(sentiment: number): { label: string; className: string } {
+  if (sentiment >= 2) return { label: 'Strong Buy', className: 'bg-[#00D4AA]/10 text-[#00FFD0] border-[#00D4AA]/20' }
+  if (sentiment >= 1) return { label: 'Buy', className: 'bg-[#00D4AA]/10 text-[#00D4AA] border-[#00D4AA]/20' }
+  if (sentiment <= -2) return { label: 'Strong Sell', className: 'bg-[#FF4D6A]/10 text-[#FF4D6A] border-[#FF4D6A]/20' }
+  if (sentiment <= -1) return { label: 'Sell', className: 'bg-[#FF4D6A]/10 text-[#FF4D6A] border-[#FF4D6A]/20' }
+  return { label: 'Neutral', className: 'bg-[#8B95A8]/10 text-[#8B95A8] border-[#8B95A8]/20' }
+}
+
+function formatPublishedAt(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
 }
 
 interface FailedIngestion {
@@ -119,6 +144,11 @@ const DEMO_RESULT: ExtractionResult = {
   published_at: '2025-06-10T14:30:00Z',
   tickers_extracted: ['AAPL', 'NVDA', 'MSFT'],
   recommendation_count: 3,
+  recommendations: [
+    { ticker: 'NVDA', stock_name: 'NVIDIA', sentiment: 2, conviction_level: 9, conviction_score: 92, target_price: 250, catalyst_notes: 'Dominant GPU moat with record data center capex as a secular tailwind.' },
+    { ticker: 'AAPL', stock_name: 'Apple', sentiment: 2, conviction_level: 8, conviction_score: 84, target_price: null, catalyst_notes: 'Services flywheel plus upcoming AI integration cycle.' },
+    { ticker: 'MSFT', stock_name: 'Microsoft', sentiment: 1, conviction_level: 7, conviction_score: 76, target_price: 500, catalyst_notes: 'Enterprise AI adoption through Azure and Copilot.' },
+  ],
   video_summary: 'The analyst is strongly bullish on AI infrastructure plays, citing record data center capex as a secular tailwind. NVDA leads with a dominant GPU moat; AAPL is favored for its services flywheel and upcoming AI integration cycle; MSFT is a conviction buy for enterprise AI adoption through Azure and Copilot.',
 }
 
@@ -756,7 +786,100 @@ function JobCard({
       {/* Result */}
       {result && (
         <div className="mb-6 rounded-xl border border-[#00D4AA]/20 bg-[#00D4AA]/[0.03] p-5 space-y-4 relative z-10">
-          <div className="flex items-center justify-between gap-3">
+          {/* Video header: thumbnail + meta */}
+          <div className="flex gap-4">
+            <a href={`https://www.youtube.com/watch?v=${result.video_id}`} target="_blank" rel="noreferrer" className="shrink-0">
+              <img
+                src={`https://i.ytimg.com/vi/${result.video_id}/mqdefault.jpg`}
+                alt={result.title || 'Ingested video thumbnail'}
+                className="w-40 aspect-video object-cover rounded-lg bg-[#0A0F1A] border border-[#1E293B]"
+                loading="lazy"
+              />
+            </a>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold text-[#F1F5F9] leading-snug line-clamp-2" title={result.title || undefined}>
+                {result.title || 'Untitled video'}
+              </p>
+              <p className="mt-1 text-xs text-[#8B95A8] truncate">
+                {result.channel_name} · {formatPublishedAt(result.published_at)}
+              </p>
+              <div className="mt-2 flex items-center gap-2">
+                {result.calibration_failed ? (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#FF4D6A]/10 text-[#FF4D6A] border border-[#FF4D6A]/20">
+                    <AlertTriangle className="w-3 h-3 text-[#FF4D6A]" /> Calibration Failed
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#00D4AA]/10 text-[#00FFD0] border border-[#00D4AA]/20">
+                    <CheckCircle2 className="w-3 h-3 text-[#00D4AA]" /> Calibrated
+                  </span>
+                )}
+                {result.calibration_failed && (
+                  <button
+                    onClick={() => handleRecalibrateVideo(result.video_id)}
+                    disabled={isRecalibrating}
+                    className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#FF4D6A]/30 bg-[#FF4D6A]/10 text-xs font-semibold text-[#FF4D6A] hover:bg-[#FF4D6A]/20 transition-colors disabled:opacity-50"
+                    title="Retry continuous signal calibration"
+                  >
+                    {isRecalibrating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3 text-[#FF4D6A]" />}
+                    ⚡ Recalibrate
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Summary */}
+          {result.video_summary && (
+            <div className="rounded-lg border border-[#1E293B] bg-[#0A0F1A]/60 px-4 py-3">
+              <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-[#64748B] font-[family-name:var(--font-geist-mono)] mb-1.5">Summary</p>
+              <p className="text-[13px] leading-relaxed text-[#CBD5E1]">{result.video_summary}</p>
+            </div>
+          )}
+
+          {/* Per-stock recommendations */}
+          {(result.recommendations && result.recommendations.length > 0) ? (
+            <div className="space-y-2">
+              <p className="text-[10px] uppercase tracking-[0.2em] font-bold text-[#64748B] font-[family-name:var(--font-geist-mono)]">
+                Stocks · {result.recommendation_count}
+              </p>
+              {result.recommendations.map((rec) => {
+                const meta = sentimentMeta(rec.sentiment)
+                return (
+                  <div key={rec.ticker} className="rounded-lg border border-[#1E293B] bg-[#0A0F1A]/60 px-4 py-3 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-baseline gap-2 min-w-0">
+                        <Link href={`/ticker?s=${rec.ticker}`} target="_blank" className="font-[family-name:var(--font-geist-mono)] text-sm font-bold text-[#F1F5F9] hover:text-[#00D4AA] transition-colors">
+                          {rec.ticker}
+                        </Link>
+                        {rec.stock_name && <span className="text-xs text-[#8B95A8] truncate">{rec.stock_name}</span>}
+                      </div>
+                      <span className={`shrink-0 inline-flex items-center px-2 py-0.5 rounded-md text-[11px] font-semibold border ${meta.className}`}>
+                        {meta.label}
+                      </span>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-[family-name:var(--font-geist-mono)] text-[11px] text-[#8B95A8]">
+                      <span>
+                        Conviction{' '}
+                        <span className="text-[#F1F5F9]">
+                          {rec.conviction_score != null ? `${Math.round(rec.conviction_score)}/100` : `${rec.conviction_level}/10`}
+                        </span>
+                      </span>
+                      {rec.target_price != null && (
+                        <span>
+                          Target <span className="text-[#F1F5F9]">${rec.target_price.toLocaleString('en-US', { maximumFractionDigits: 2 })}</span>
+                        </span>
+                      )}
+                    </div>
+                    {rec.catalyst_notes && (
+                      <p className="text-xs leading-relaxed text-[#8B95A8] line-clamp-2" title={rec.catalyst_notes}>
+                        {rec.catalyst_notes}
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ) : (
             <div className="flex flex-wrap items-center gap-2">
               {result.tickers_extracted.map((ticker) => (
                 <Link key={ticker} href={`/ticker?s=${ticker}`} target="_blank" className="rounded-md bg-[#00D4AA]/10 px-2.5 py-1 text-xs font-bold text-[#00D4AA] hover:bg-[#00D4AA]/20">
@@ -764,29 +887,10 @@ function JobCard({
                 </Link>
               ))}
               {result.tickers_extracted.length === 0 && <span className="text-xs text-[#8B95A8]">No tickers found.</span>}
-              {result.calibration_failed ? (
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#FF4D6A]/10 text-[#FF4D6A] border border-[#FF4D6A]/20">
-                  <AlertTriangle className="w-3 h-3 text-[#FF4D6A]" /> Calibration Failed
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold bg-[#00D4AA]/10 text-[#00FFD0] border border-[#00D4AA]/20">
-                  <CheckCircle2 className="w-3 h-3 text-[#00D4AA]" /> Calibrated
-                </span>
-              )}
             </div>
-            {result.calibration_failed && (
-              <button
-                onClick={() => handleRecalibrateVideo(result.video_id)}
-                disabled={isRecalibrating}
-                className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#FF4D6A]/30 bg-[#FF4D6A]/10 text-xs font-semibold text-[#FF4D6A] hover:bg-[#FF4D6A]/20 transition-colors disabled:opacity-50"
-                title="Retry continuous signal calibration"
-              >
-                {isRecalibrating ? <Loader2 className="w-3 h-3 animate-spin" /> : <Zap className="w-3 h-3 text-[#FF4D6A]" />}
-                ⚡ Recalibrate
-              </button>
-            )}
-          </div>
-          <div className="flex gap-3 mt-3">
+          )}
+
+          <div className="flex gap-3">
             <Link href={`/video?id=${result.video_id}`} target="_blank" className="text-xs text-[#00D4AA] hover:underline">View Video →</Link>
             {result.channel_id && <Link href={`/channel?id=${result.channel_id}`} target="_blank" className="text-xs text-[#00D4AA] hover:underline">View Channel →</Link>}
           </div>

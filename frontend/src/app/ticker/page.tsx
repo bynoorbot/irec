@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, Suspense } from 'react'
+import { useEffect, useState, useMemo, Suspense } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/client'
@@ -56,6 +56,22 @@ interface Recommendation {
   }
 }
 
+interface UserPosition {
+  ticker?: string
+  shares: number
+  average_cost: number
+  current_price: number | null
+  total_return_pct?: number | null
+  daily_change_pct?: number | null
+  weekly_change_pct?: number | null
+  monthly_change_pct?: number | null
+  ytd_return_pct?: number | null
+  '1y_return_pct'?: number | null
+  sector?: string | null
+  cap_size?: string | null
+  [key: string]: unknown
+}
+
 function formatDate(dateString: string): string {
   const date = new Date(dateString)
   return date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" })
@@ -108,27 +124,52 @@ function VideoThumbnailLink({ youtubeVideoId }: { youtubeVideoId: string }) {
   )
 }
 
+function parseTickerSymbol(raw: string | null) {
+  if (!raw) return { raw: '', base: '', yf: '', isUk: false }
+  const s = raw.trim().toUpperCase()
+  let isUk = false
+  let clean = s
+  for (const prefix of ['LON:', 'LSE:', 'LON.', 'LSE.', 'ISE:', 'DUB:']) {
+    if (clean.startsWith(prefix)) {
+      clean = clean.slice(prefix.length).trim()
+      isUk = true
+      break
+    }
+  }
+  for (const suffix of ['.L', '.LON', '.LSE', '.IL', '.IR']) {
+    if (clean.endsWith(suffix)) {
+      clean = clean.slice(0, -suffix.length).trim()
+      isUk = true
+      break
+    }
+  }
+  const base = clean.split('.')[0].split('-')[0].trim()
+  const yf = isUk ? `${base}.L` : base
+  return { raw: s, base, yf, isUk }
+}
+
 function TickerContent() {
   const searchParams = useSearchParams()
   const router = useRouter()
-  const symbolRaw = searchParams.get('s')
+  const rawParam = searchParams.get('s') || searchParams.get('ticker')
+  const parsed = useMemo(() => parseTickerSymbol(rawParam), [rawParam])
   
   useEffect(() => {
-    if (symbolRaw?.toUpperCase() === 'GOOG') {
+    if (parsed.base === 'GOOG') {
       router.replace('/ticker?s=GOOGL')
     }
-  }, [symbolRaw, router])
+  }, [parsed.base, router])
 
-  const symbol = symbolRaw?.toUpperCase() === 'GOOG' ? 'GOOGL' : symbolRaw
+  const symbol = parsed.base === 'GOOG' ? 'GOOGL' : (parsed.raw || '')
   
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [radars, setRadars] = useState<RadarResponse[]>([])
-  const [position, setPosition] = useState<any>(null)
+  const [position, setPosition] = useState<UserPosition | null>(null)
   const [isPositionExpanded, setIsPositionExpanded] = useState<boolean>(false)
   const [loading, setLoading] = useState(true)
   const [showMoreLinks, setShowMoreLinks] = useState(false)
 
-  const isInvalid = !symbol || symbol.length > 8 || !/^[a-zA-Z.-]+$/.test(symbol)
+  const isInvalid = !parsed.base || parsed.raw.length > 16 || !/^[A-Za-z0-9.:-]+$/.test(parsed.raw)
 
   useEffect(() => {
     async function fetchData() {
@@ -138,6 +179,9 @@ function TickerContent() {
       }
 
       setLoading(true)
+      const searchCandidates = Array.from(
+        new Set([parsed.raw, parsed.base, parsed.yf, `${parsed.base}.L`].filter(Boolean))
+      )
       try {
         const supabase = createClient()
         
@@ -168,7 +212,7 @@ function TickerContent() {
                 channels!inner(channel_name, trust_weight)
               )
             `)
-            .eq("ticker", symbol.toUpperCase())
+            .in("ticker", searchCandidates)
 
           if (res.error) {
             res = (await supabase
@@ -189,14 +233,14 @@ function TickerContent() {
                   channels!inner(channel_name, trust_weight)
                 )
               `)
-              .eq("ticker", symbol.toUpperCase())) as any
+              .in("ticker", searchCandidates)) as typeof res
           }
           return res
         }
 
         const [recsRes, radarsRes] = await Promise.all([
           fetchRecs(),
-          fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/v1/radars/ticker/${symbol.toUpperCase()}`)
+          fetch(`${process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/v1/radars/ticker/${parsed.base}`)
             .then(res => res.ok ? res.json() : [])
             .catch(() => [])
         ])
@@ -221,8 +265,8 @@ function TickerContent() {
           const { data } = await supabase
             .from("user_portfolio")
             .select("*")
-            .eq("ticker", symbol.toUpperCase())
-            .single()
+            .in("ticker", searchCandidates)
+            .maybeSingle()
           if (data) setPosition(data)
         }
       } catch (error) {
@@ -231,7 +275,7 @@ function TickerContent() {
     }
     
     fetchData()
-  }, [symbol, isInvalid])
+  }, [parsed.raw, parsed.base, parsed.yf, isInvalid])
 
   if (loading) {
     return (
@@ -331,7 +375,7 @@ function TickerContent() {
             {/* Right side: Menu Links */}
             <div className="flex flex-wrap items-center gap-2 self-start md:mt-2">
               <a
-                href={`https://finance.yahoo.com/quote/${symbol.toUpperCase()}`}
+                href={`https://finance.yahoo.com/quote/${parsed.yf}`}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="group/yf inline-flex items-center gap-2 text-sm text-[#64748B] hover:text-[#F1F5F9] border border-[#1E293B] hover:border-[#2D3A4F] bg-[#141B2D]/60 hover:bg-[#141B2D] rounded-lg px-4 py-2 transition-all duration-200 whitespace-nowrap shrink-0"
@@ -360,7 +404,7 @@ function TickerContent() {
                 {showMoreLinks && (
                   <div className="absolute right-0 top-full mt-2 z-50 min-w-[180px] rounded-lg border border-[#1E293B] bg-[#0F172A] shadow-xl shadow-black/40 py-1">
                     <a
-                      href={`https://www.tradingview.com/symbols/${symbol.toUpperCase()}/`}
+                      href={parsed.isUk ? `https://www.tradingview.com/symbols/LSE-${parsed.base}/` : `https://www.tradingview.com/symbols/${parsed.base}/`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="flex items-center gap-2 px-3 py-2 text-xs text-[#8B95A8] hover:text-[#F1F5F9] hover:bg-[#141B2D] transition-colors"
@@ -370,6 +414,19 @@ function TickerContent() {
                         <path d="M7 12l4-4 4 4 5-5"/>
                       </svg>
                       <span className="font-[family-name:var(--font-geist-mono)] tracking-wide">TradingView</span>
+                    </a>
+                    <a
+                      href={parsed.isUk ? `https://www.google.com/finance/quote/${parsed.base}:LON` : `https://www.google.com/finance/quote/${parsed.base}:NASDAQ`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="flex items-center gap-2 px-3 py-2 text-xs text-[#8B95A8] hover:text-[#F1F5F9] hover:bg-[#141B2D] transition-colors"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0">
+                        <circle cx="12" cy="12" r="10"/>
+                        <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/>
+                        <path d="M2 12h20"/>
+                      </svg>
+                      <span className="font-[family-name:var(--font-geist-mono)] tracking-wide">Google Finance</span>
                     </a>
                     <a
                       href={`https://finviz.com/quote.ashx?t=${symbol.toUpperCase()}`}
@@ -497,15 +554,20 @@ function TickerContent() {
               <>
                 {/* --- CREATIVE LAYOUT REDESIGN --- */}
                 {(() => {
-                  const hasPrice = position.current_price != null && position.current_price > 0;
+                  const currentPrice = position.current_price;
+                  const hasPrice = currentPrice != null && currentPrice > 0;
                   const invested = position.shares * position.average_cost;
-                  const currentValue = hasPrice ? position.shares * position.current_price : null;
+                  const currentValue = hasPrice ? position.shares * currentPrice : null;
                   
                   const totalPnLDollars = currentValue ? currentValue - invested : null;
-                  const totalPnLPct = currentValue ? ((position.current_price - position.average_cost) / position.average_cost) * 100 : position.total_return_pct;
+                  const totalPnLPct = currentValue && hasPrice
+                    ? ((currentPrice - position.average_cost) / position.average_cost) * 100
+                    : position.total_return_pct;
 
                   const targetValue = avgPrice ? position.shares * avgPrice : null;
-                  const upsidePct = avgPrice && position.current_price ? ((avgPrice - position.current_price) / position.current_price) * 100 : null;
+                  const upsidePct = avgPrice && hasPrice
+                    ? ((avgPrice - currentPrice) / currentPrice) * 100
+                    : null;
 
                   // --- TWO independent color signals ---
                   // Signal 1: Cost -> Live (am I profitable RIGHT NOW?)
@@ -531,8 +593,8 @@ function TickerContent() {
                     ? 'from-[#FF4D6A]/8'
                     : 'from-[#8B95A8]/5';
                   
-                  const fmt = (num: any, d = 1) => {
-                    if (num == null) return '—';
+                  const fmt = (num: unknown, d = 1) => {
+                    if (typeof num !== 'number') return '—';
                     return num.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: d });
                   };
                   

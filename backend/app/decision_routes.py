@@ -265,12 +265,54 @@ def aura_aggregates() -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _safe_table(fn, default):
+def default_state() -> Dict[str, Any]:
+    return {"never": [], "not_now": [], "etf_whitelist": list(DEFAULT_ETF_WHITELIST), "log": []}
+
+
+def apply_dismiss(state: Dict[str, Any], ticker: str, kind: str, reason: Optional[str]) -> Dict[str, Any]:
+    t = ticker.upper().strip()
+    never = [x for x in state.get("never", []) if x != t]
+    not_now = [n for n in state.get("not_now", []) if n.get("ticker") != t]
+    if kind == "never":
+        never.append(t)
+    elif kind == "not_now":
+        not_now.append({"ticker": t, "reason": reason})
+    return {**state, "never": never, "not_now": not_now}
+
+
+def apply_etf(state: Dict[str, Any], ticker: str, action: str) -> Dict[str, Any]:
+    t = ticker.upper().strip()
+    etfs = [x for x in state.get("etf_whitelist", []) if x != t]
+    if action == "approve":
+        etfs.append(t)
+    return {**state, "etf_whitelist": etfs or list(DEFAULT_ETF_WHITELIST)}
+
+
+def _state_key(uid: str) -> str:
+    return f"decision_state:{uid}"
+
+
+async def _load_state(uid: str) -> Dict[str, Any]:
+    """Owner decision state lives in the existing api_cache table (no migration needed)."""
     try:
-        return fn()
+        res = _get_client().table("api_cache").select("payload").eq("cache_key", _state_key(uid)).execute()
+        if res.data and isinstance(res.data[0].get("payload"), dict):
+            return {**default_state(), **res.data[0]["payload"]}
     except Exception as e:
-        logger.warning(f"decision table unavailable (run migration 021): {e}")
-        return default
+        logger.warning(f"decision state read failed: {e}")
+    return default_state()
+
+
+async def _save_state(uid: str, state: Dict[str, Any]) -> None:
+    """Persist state; failures raise so the UI never shows a fake success."""
+    try:
+        _get_client().table("api_cache").upsert({
+            "cache_key": _state_key(uid), "payload": state,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        logger.error(f"decision state write failed: {e}")
+        raise HTTPException(status_code=503, detail="Could not save your change - database write failed. Try again.") from e
 
 
 class DismissRequest(BaseModel):
@@ -287,17 +329,10 @@ class EtfRequest(BaseModel):
 @router.get("/state")
 async def decision_state(authorization: str = Header(None), _owner: str = Depends(verify_owner)):
     uid = _user_id(authorization)
-    client = _get_client()
-    never, not_now, etfs = [], [], list(DEFAULT_ETF_WHITELIST)
-    if uid:
-        rows = _safe_table(lambda: client.table("decision_blacklist").select("ticker,kind,reason").eq("user_id", uid).execute().data or [], [])
-        never = [r["ticker"] for r in rows if r.get("kind") == "never"]
-        not_now = [{"ticker": r["ticker"], "reason": r.get("reason")} for r in rows if r.get("kind") == "not_now"]
-        erows = _safe_table(lambda: client.table("decision_etf_whitelist").select("ticker,status").eq("user_id", uid).execute().data or [], [])
-        approved = [r["ticker"] for r in erows if r.get("status") == "approved"]
-        if approved:
-            etfs = approved
-    return {"never": never, "not_now": not_now, "etf_whitelist": etfs}
+    if not uid:
+        raise HTTPException(status_code=401, detail="User ID not found in token")
+    state = await _load_state(uid)
+    return {"never": state["never"], "not_now": state["not_now"], "etf_whitelist": state["etf_whitelist"]}
 
 
 @router.post("/dismiss")
@@ -307,14 +342,10 @@ async def decision_dismiss(body: DismissRequest, authorization: str = Header(Non
         raise HTTPException(status_code=401, detail="User ID not found in token")
     if body.kind not in ("never", "not_now", "clear"):
         raise HTTPException(status_code=400, detail="kind must be never, not_now or clear")
-    client = _get_client()
-    t = body.ticker.upper().strip()
-    if body.kind == "clear":
-        _safe_table(lambda: client.table("decision_blacklist").delete().eq("user_id", uid).eq("ticker", t).execute(), None)
-        return {"status": "success", "ticker": t, "kind": "clear"}
-    _safe_table(lambda: client.table("decision_blacklist").upsert(
-        {"user_id": uid, "ticker": t, "kind": body.kind, "reason": body.reason}, on_conflict="user_id,ticker").execute(), None)
-    return {"status": "success", "ticker": t, "kind": body.kind}
+    state = apply_dismiss(await _load_state(uid), body.ticker, body.kind, body.reason)
+    await _save_state(uid, state)
+    return {"status": "success", "ticker": body.ticker.upper(), "kind": body.kind,
+            "never": state["never"], "not_now": state["not_now"]}
 
 
 @router.post("/etf")
@@ -324,15 +355,10 @@ async def decision_etf(body: EtfRequest, authorization: str = Header(None), _own
         raise HTTPException(status_code=401, detail="User ID not found in token")
     if body.action not in ("approve", "propose", "remove"):
         raise HTTPException(status_code=400, detail="action must be approve, propose or remove")
-    client = _get_client()
-    t = body.ticker.upper().strip()
-    if body.action == "remove":
-        _safe_table(lambda: client.table("decision_etf_whitelist").delete().eq("user_id", uid).eq("ticker", t).execute(), None)
-    else:
-        _safe_table(lambda: client.table("decision_etf_whitelist").upsert(
-            {"user_id": uid, "ticker": t, "status": "approved" if body.action == "approve" else "proposed"},
-            on_conflict="user_id,ticker").execute(), None)
-    return {"status": "success", "ticker": t, "action": body.action}
+    state = apply_etf(await _load_state(uid), body.ticker, body.action)
+    await _save_state(uid, state)
+    return {"status": "success", "ticker": body.ticker.upper(), "action": body.action,
+            "etf_whitelist": state["etf_whitelist"]}
 
 
 @router.get("/")
@@ -441,14 +467,20 @@ async def get_decision(authorization: str = Header(None), _owner: str = Depends(
                "this_week": this_week, "sectors": sectors, "candidates": candidates[:7],
                "holdings": sorted(holdings, key=lambda x: x["weight_pct"], reverse=True), "alerts": alerts,
                "state": state, "benchmark_note": "Stock picks as a group must beat the approved Shariah ETF over rolling periods, or weight shifts back to ETF."}
-    _safe_table(lambda: client.table("decision_log").insert(
-        {"user_id": uid, "action": this_week["action"], "ticker": this_week["ticker"], "reason": this_week["reason"]}).execute(), None)
+    try:
+        full_state = await _load_state(uid)
+        entry = {"action": this_week["action"], "ticker": this_week["ticker"],
+                 "reason": this_week["reason"], "created_at": payload["generated_at"]}
+        await _save_state(uid, {**full_state, "log": ([entry] + full_state.get("log", []))[:30]})
+    except Exception as e:
+        logger.warning(f"decision log write skipped: {e}")
     return payload
 
 
 @router.get("/log")
 async def decision_log(authorization: str = Header(None), _owner: str = Depends(verify_owner)):
     uid = _user_id(authorization)
-    client = _get_client()
-    rows = _safe_table(lambda: client.table("decision_log").select("*").eq("user_id", uid).order("created_at", desc=True).limit(30).execute().data or [], [])
-    return {"log": rows}
+    if not uid:
+        raise HTTPException(status_code=401, detail="User ID not found in token")
+    state = await _load_state(uid)
+    return {"log": state.get("log", [])}

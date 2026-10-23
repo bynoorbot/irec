@@ -34,6 +34,24 @@ def test_weak_stock_fails_and_aura_alone_cannot_approve():
     assert verdict_for(sum(c["score"] for c in checks), held=True) in ("Probation", "Watch")
 
 
+def test_decision_state_actions_persist_in_payload():
+    """Regression: dismiss/ETF actions must mutate persisted state, not vanish."""
+    from app.decision_routes import apply_dismiss, apply_etf, default_state
+
+    state = default_state()
+    assert state["etf_whitelist"] == ["ISDU"]
+    state = apply_dismiss(state, "TSLA", "never", "personal restriction")
+    state = apply_dismiss(state, "SHOP", "not_now", None)
+    assert state["never"] == ["TSLA"]
+    assert [n["ticker"] for n in state["not_now"]] == ["SHOP"]
+    state = apply_dismiss(state, "TSLA", "clear", None)
+    assert state["never"] == []
+    state = apply_etf(state, "ISUS", "approve")
+    assert state["etf_whitelist"] == ["ISDU", "ISUS"]
+    state = apply_etf(state, "ISUS", "remove")
+    assert state["etf_whitelist"] == ["ISDU"]
+
+
 def test_verdicts_and_sector_bands():
     assert verdict_for(11, held=False) == "Master List"
     assert verdict_for(9, held=True) == "Watch"

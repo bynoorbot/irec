@@ -28,6 +28,7 @@
 *(Read `tech.md` for full details)*
 - **Frontend:** Next.js 16 (App Router), React 19, TypeScript 5, Tailwind CSS 4.
   - *Critical Constraint:* The frontend compiles to a **Static Export** (`output: "export"`). Do not use Next.js dynamic edge functions, server actions, or Next.js Image Optimization (`next/image`).
+  - *Hosting & Edge Deployment:* The frontend is hosted on **Cloudflare Workers with Static Assets** via Wrangler (`frontend/wrangler.jsonc`), serving static assets with auto-trailing-slash and 404 handling, bound to custom domain `aura.bynoor.io`. Automated deployments run via GitHub Actions (`deploy-frontend.yml`) using `CLOUDFLARE_API_TOKEN`.
   - *OpenGraph Constraint:* Because of `trailingSlash: true`, OG tags will break. Use the hidden API route `src/app/api/generate-og/route.tsx` to design the OG banner, then export it manually to `public/og.png`.
   - *JSX Link Nesting:* Never nest Next.js `<Link>` components within other `<Link>` tags in composite cards. Use a container `<div>` with navigation handlers and `e.stopPropagation()` on inner action buttons.
   - *Data Density & Screeners:* When screening data lists (e.g. `/explore`), provide slide-out peek drawers (desktop right-panel, mobile bottom-sheet) to inspect details without disrupting scroll position.

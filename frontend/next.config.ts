@@ -5,6 +5,7 @@ const commitHash = execSync("git rev-parse --short HEAD").toString().trim();
 const buildDate = new Date().toISOString();
 
 const nextConfig: NextConfig = {
+  allowedDevOrigins: ["192.168.1.173"],
   output: "export",
   images: {
     unoptimized: true,

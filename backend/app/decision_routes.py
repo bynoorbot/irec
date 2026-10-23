@@ -26,7 +26,53 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/decision", tags=["decision"])
 
 DEFAULT_ETF_WHITELIST = ["ISDU"]
-KNOWN_ETFS = {"ISDU", "ISWD", "ISUS", "ISDE", "IGDA", "ISDX", "WITS", "SKUK"}
+KNOWN_ETFS = {
+    # Shariah ETFs (UCITS Ireland, UK & US)
+    "ISDU", "ISWD", "ISUS", "ISDE", "IGDA", "ISDX", "WITS", "SKUK",
+    "SPUS", "HLAL", "UMMA", "SPSK", "SPRE", "KSA", "GLD", "IAU",
+    # Broad & Sector Index ETFs
+    "SPY", "VOO", "IVV", "QQQ", "QQQM", "VTI", "VXUS", "VT", "VEA", "VWO",
+    "SMH", "SOXX", "XLK", "XLE", "XLF", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE",
+    "IWM", "IWF", "IWD", "DIA", "SCHD", "ARKK", "TLT", "BND", "AGG",
+}
+
+
+def is_etf_ticker(ticker: str) -> bool:
+    t = (ticker or "").upper().strip()
+    base = t.split(".")[0].split("-")[0]
+    return t in KNOWN_ETFS or base in KNOWN_ETFS
+
+
+def is_etf(
+    ticker: str,
+    sector_text: Optional[str] = None,
+    cap_size_text: Optional[str] = None,
+    info: Optional[Dict[str, Any]] = None,
+    whitelist: Optional[set] = None,
+) -> bool:
+    t = (ticker or "").upper().strip()
+    base = t.split(".")[0].split("-")[0]
+    if whitelist and (t in whitelist or base in whitelist):
+        return True
+    if is_etf_ticker(t):
+        return True
+    sec = (sector_text or "").lower().strip()
+    if sec in ("etf", "etfs", "fund", "funds", "exchange traded fund", "index fund"):
+        return True
+    cap = (cap_size_text or "").lower().strip()
+    if cap in ("etf", "etfs"):
+        return True
+    if info:
+        qt = str(info.get("quoteType") or "").upper().strip()
+        if qt in ("ETF", "MUTUALFUND"):
+            return True
+        category = str(info.get("category") or "").lower()
+        if "etf" in category or "fund" in category:
+            return True
+        name = f"{info.get('shortName', '')} {info.get('longName', '')}".lower()
+        if any(w in name for w in ("etf", "ucits", "ishares", "vanguard", "invesco", "index fund")):
+            return True
+    return False
 
 BUCKET_TICKERS: Dict[str, set] = {
     "Semis & AI Infra": {"NVDA", "AVGO", "AMD", "MU", "INTC", "MRVL", "TSM", "ASML", "ARM", "QCOM", "LRCX", "AMAT", "KLAC", "ON", "SMCI", "TXN", "ADI"},
@@ -46,10 +92,13 @@ _FUND_TTL = 6 * 3600
 
 def bucket_for(ticker: str, sector_text: Optional[str] = None) -> str:
     t = (ticker or "").upper()
+    base = t.split(".")[0].split("-")[0]
+    s = (sector_text or "").lower()
+    if s in ("etf", "etfs", "fund", "funds", "exchange traded fund", "index fund") or is_etf_ticker(t):
+        return "ETF Base"
     for bucket, tickers in BUCKET_TICKERS.items():
         if t in tickers:
             return bucket
-    s = (sector_text or "").lower()
     if "semiconductor" in s:
         return "Semis & AI Infra"
     if "security" in s or "cyber" in s:
@@ -149,6 +198,17 @@ def score_checks(info: Dict[str, Any], aura: Optional[Dict[str, Any]], momentum:
     return checks
 
 
+def score_etf_checks(info: Dict[str, Any], aura: Optional[Dict[str, Any]], momentum: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        _check("growth", "Growth", 2, "Broad market / thematic index expansion"),
+        _check("quality", "Quality & Moat", 2, "Diversified physical/synthetic fund structure"),
+        _check("strength", "Financial Strength", 2, "Asset-backed physical ETF holdings"),
+        _check("valuation", "Valuation (GARP)", 2, "Market NAV / Index valuation baseline"),
+        _check("whynow", "Why Now / Earnings Momentum", 2, "Core foundational allocation"),
+        _check("trend", "Trend Confirmation", 2, "Index benchmark trend tracking"),
+    ]
+
+
 def total_score(checks: List[Dict[str, Any]]) -> int:
     return sum(c["score"] for c in checks)
 
@@ -169,7 +229,7 @@ def verdict_for(score: int, held: bool) -> str:
 def select_candidates(aura: Dict[str, Dict[str, Any]], held: set, never: set, not_now: set, limit: int = 12) -> List[str]:
     """Idea-feed candidates: exclude held, Never, Not-now (parked), and ETFs."""
     ranked = sorted(aura.items(), key=lambda kv: ((kv[1].get("mentions_30d") or 0), (kv[1].get("conviction") or 0)), reverse=True)
-    return [t for t, _a in ranked if t not in held and t not in never and t not in not_now and t not in KNOWN_ETFS][:limit]
+    return [t for t, _a in ranked if t not in held and t not in never and t not in not_now and not is_etf_ticker(t)][:limit]
 
 
 def sector_verdict(score: float) -> str:
@@ -374,7 +434,8 @@ def fingerprint_state(state: Dict[str, Any]) -> str:
     import hashlib, json
     core = {"never": sorted(state.get("never", [])),
             "not_now": sorted(n.get("ticker") for n in state.get("not_now", [])),
-            "etf": sorted(state.get("etf_whitelist", []))}
+            "etf": sorted(state.get("etf_whitelist", [])),
+            "v": "etf_v2"}
     return hashlib.sha256(json.dumps(core, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -439,22 +500,39 @@ async def get_decision(authorization: str = Header(None), fresh: bool = False, _
         if held_row:
             mom = {"price": held_row.get("current_price"), "weekly": held_row.get("weekly_change_pct"), "monthly": held_row.get("monthly_change_pct")}
         info = fund.get(ticker) or {}
-        checks = score_checks(info, a, mom)
-        score = total_score(checks)
+        sector_text = (held_row or {}).get("sector") or info.get("sector")
+        cap_size_text = (held_row or {}).get("cap_size")
+        is_holding_etf = is_etf(ticker, sector_text, cap_size_text, info, set(etf_whitelist))
+
+        if is_holding_etf:
+            checks = score_etf_checks(info, a, mom)
+            score = total_score(checks)
+            bucket = "ETF Base"
+            verdict = "Core ETF"
+            passes_strict_val = True
+            evidence_src = "Fund Prospectus / Index NAV"
+        else:
+            checks = score_checks(info, a, mom)
+            score = total_score(checks)
+            bucket = bucket_for(ticker, sector_text)
+            verdict = verdict_for(score, held_row is not None)
+            passes_strict_val = passes_strict(checks)
+            evidence_src = "yfinance fundamentals (Yahoo Finance)"
+
         weight = 0.0
         if held_row and total_value:
             weight = (held_row.get("shares") or 0) * (held_row.get("current_price") or held_row.get("average_cost") or 0) / total_value * 100
-        sector_text = (held_row or {}).get("sector") or info.get("sector")
+
         return {"ticker": ticker, "stock_name": a.get("stock_name") or info.get("shortName") or info.get("longName"),
-                "bucket": bucket_for(ticker, sector_text), "sector": sector_text,
+                "bucket": bucket, "sector": sector_text, "is_etf": is_holding_etf,
                 "held": held_row is not None, "weight_pct": round(weight, 2),
                 "price": info.get("currentPrice") or (held_row or {}).get("current_price"),
-                "score": score, "checks": checks, "passes_strict": passes_strict(checks),
-                "verdict": verdict_for(score, held_row is not None),
+                "score": score, "checks": checks, "passes_strict": passes_strict_val,
+                "verdict": verdict,
                 "aura": {"sentiment": a.get("sentiment"), "conviction": a.get("conviction"),
                          "mentions_30d": a.get("mentions_30d") or 0, "analyst_count": a.get("analyst_count") or 0,
                          "source": "Aura/YouTube idea-feed" if a else None, "latest_mention": a.get("latest")},
-                "evidence_source": "yfinance fundamentals (Yahoo Finance)", "cap_size": (held_row or {}).get("cap_size") or info.get("marketCap")}
+                "evidence_source": evidence_src, "cap_size": cap_size_text or info.get("marketCap")}
 
     holdings = [build(p["ticker"], p) for p in holdings_raw]
     candidates = [build(t, None) for t in cand_tickers]
@@ -462,7 +540,8 @@ async def get_decision(authorization: str = Header(None), fresh: bool = False, _
     # Sector scores /10 from 5 factors proxied by member checks + momentum.
     sector_items: Dict[str, List[Dict[str, Any]]] = {}
     for it in holdings + candidates:
-        sector_items.setdefault(it["bucket"], []).append(it)
+        if not it.get("is_etf"):
+            sector_items.setdefault(it["bucket"], []).append(it)
     sectors = []
     for bucket in BUCKETS:
         members = sector_items.get(bucket, [])
@@ -484,8 +563,8 @@ async def get_decision(authorization: str = Header(None), fresh: bool = False, _
             c["passes_strict"] = False
     candidates.sort(key=lambda x: (x["passes_strict"], x["score"]), reverse=True)
 
-    etf_weight = sum(h["weight_pct"] for h in holdings if h["ticker"] in set(etf_whitelist) | KNOWN_ETFS)
-    stock_weight = round(100 - etf_weight, 1) if holdings else 0
+    etf_weight = round(sum(h["weight_pct"] for h in holdings if h.get("is_etf")), 1)
+    stock_weight = round(max(0.0, 100.0 - etf_weight), 1) if holdings else 0.0
     top = next((c for c in candidates if c["passes_strict"]), None)
     if top:
         this_week = {"action": "Add" if top["held"] else "Start", "ticker": top["ticker"], "bucket": top["bucket"],
@@ -498,12 +577,16 @@ async def get_decision(authorization: str = Header(None), fresh: bool = False, _
 
     alerts = []
     for h in holdings:
-        if h["weight_pct"] > 5.5:
-            alerts.append({"ticker": h["ticker"], "type": "Trim", "detail": f"Weight {h['weight_pct']}% above ~5% single-name cap - trim on strength, not on a price drop alone."})
-        if h["verdict"] == "Probation":
-            alerts.append({"ticker": h["ticker"], "type": "Probation", "detail": f"Score {h['score']}/12 below 8 - no adding; re-judge after next earnings, two weak quarters trigger exit plan."})
-        elif h["verdict"] == "Watch":
-            alerts.append({"ticker": h["ticker"], "type": "Watch", "detail": f"Score {h['score']}/12 - thesis intact but weakening; check next earnings."})
+        if not h.get("is_etf"):
+            if h["weight_pct"] > 5.5:
+                alerts.append({"ticker": h["ticker"], "type": "Trim", "detail": f"Weight {h['weight_pct']}% above ~5% single-name cap - trim on strength, not on a price drop alone."})
+            if h["verdict"] == "Probation":
+                alerts.append({"ticker": h["ticker"], "type": "Probation", "detail": f"Score {h['score']}/12 below 8 - no adding; re-judge after next earnings, two weak quarters trigger exit plan."})
+            elif h["verdict"] == "Watch":
+                alerts.append({"ticker": h["ticker"], "type": "Watch", "detail": f"Score {h['score']}/12 - thesis intact but weakening; check next earnings."})
+        else:
+            if h["weight_pct"] > 35:
+                alerts.append({"ticker": h["ticker"], "type": "Bucket warning", "detail": f"ETF {h['ticker']} weight {h['weight_pct']}% exceeds 35% foundation ceiling."})
     for s in sectors:
         if s["weight_pct"] > 30:
             alerts.append({"ticker": s["bucket"], "type": "Bucket warning", "detail": f"Bucket weight {s['weight_pct']}% - soft warning only, high conviction may override."})

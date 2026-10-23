@@ -87,3 +87,23 @@ def test_verdicts_and_sector_bands():
     assert sector_verdict(8) == "Hot"
     assert sector_verdict(5) == "Neutral"
     assert sector_verdict(2) == "Ignore"
+
+
+def test_etf_detection_and_bucketing():
+    from app.decision_routes import is_etf, is_etf_ticker
+
+    assert is_etf_ticker("SPUS") is True
+    assert is_etf_ticker("HLAL") is True
+    assert is_etf_ticker("ISDU") is True
+    assert is_etf_ticker("ISDU.L") is True
+    assert is_etf_ticker("AAPL") is False
+
+    assert is_etf("RANDOM", sector_text="ETF") is True
+    assert is_etf("CUSTOM", cap_size_text="ETFs") is True
+    assert is_etf("FND", info={"quoteType": "ETF"}) is True
+    assert is_etf("AAPL", sector_text="Technology", info={"quoteType": "EQUITY"}) is False
+
+    assert bucket_for("SPUS") == "ETF Base"
+    assert bucket_for("HLAL") == "ETF Base"
+    assert bucket_for("UNKNOWN", "ETF") == "ETF Base"
+

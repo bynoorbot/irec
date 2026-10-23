@@ -93,9 +93,10 @@ export function DecisionHoldingsTable({ holdings, alerts }: HoldingsTableProps) 
           </thead>
           <tbody className="divide-y divide-[#1E293B]">
             {holdings.map((h) => {
-              const isOverCap = h.weight_pct > 5.0
-              const isSevereOverCap = h.weight_pct >= 5.5
-              const isHealthy = h.verdict === 'Healthy'
+              const isEtfHolding = h.bucket === 'ETF Base' || h.verdict === 'Core ETF' || h.is_etf
+              const isOverCap = !isEtfHolding && h.weight_pct > 5.0
+              const isSevereOverCap = !isEtfHolding && h.weight_pct >= 5.5
+              const isHealthy = h.verdict === 'Healthy' || h.verdict === 'Core ETF'
               const isProbation = h.verdict === 'Probation'
 
               // Cap corridor math: scale 0% - 10%
@@ -127,29 +128,40 @@ export function DecisionHoldingsTable({ holdings, alerts }: HoldingsTableProps) 
                           TRIM
                         </span>
                       )}
+                      {isEtfHolding && (
+                        <span className="rounded bg-[#38BDF8]/15 border border-[#38BDF8]/30 px-1.5 py-0.2 font-mono text-[9px] font-bold text-[#7DD3FC]">
+                          ETF
+                        </span>
+                      )}
                     </div>
                   </td>
 
-                  {/* Cap Corridor (0% to 10% with 5% reference marker) */}
+                  {/* Cap Corridor (0% to 10% with 5% reference marker, or ETF indicator) */}
                   <td className="px-4 py-3">
-                    <div className="relative h-2 w-36 overflow-hidden rounded-full bg-[#0A0F1A] border border-[#2A364D]">
-                      {/* 5% Ceiling vertical reference marker */}
-                      <div
-                        className="absolute bottom-0 top-0 w-0.5 bg-amber-400/80 z-10"
-                        style={{ left: '50%' }}
-                        title="5.0% Target Cap"
-                      />
-                      <div
-                        className={`h-full transition-all duration-300 ${
-                          isSevereOverCap
-                            ? 'bg-[#FF4D6A]'
-                            : isOverCap
-                            ? 'bg-amber-400'
-                            : 'bg-[#00D4AA]'
-                        }`}
-                        style={{ width: `${corridorPct}%` }}
-                      />
-                    </div>
+                    {isEtfHolding ? (
+                      <span className="text-[11px] font-mono font-semibold text-[#7DD3FC]">
+                        Foundation Allocation
+                      </span>
+                    ) : (
+                      <div className="relative h-2 w-36 overflow-hidden rounded-full bg-[#0A0F1A] border border-[#2A364D]">
+                        {/* 5% Ceiling vertical reference marker */}
+                        <div
+                          className="absolute bottom-0 top-0 w-0.5 bg-amber-400/80 z-10"
+                          style={{ left: '50%' }}
+                          title="5.0% Target Cap"
+                        />
+                        <div
+                          className={`h-full transition-all duration-300 ${
+                            isSevereOverCap
+                              ? 'bg-[#FF4D6A]'
+                              : isOverCap
+                              ? 'bg-amber-400'
+                              : 'bg-[#00D4AA]'
+                          }`}
+                          style={{ width: `${corridorPct}%` }}
+                        />
+                      </div>
+                    )}
                   </td>
 
                   {/* Score /12 */}
@@ -162,14 +174,18 @@ export function DecisionHoldingsTable({ holdings, alerts }: HoldingsTableProps) 
                   <td className="px-4 py-3">
                     <span
                       className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-xs font-semibold ${
-                        isHealthy
+                        isEtfHolding
+                          ? 'bg-[#38BDF8]/10 text-[#7DD3FC] border border-[#38BDF8]/25'
+                          : isHealthy
                           ? 'bg-[#00D4AA]/10 text-[#00D4AA] border border-[#00D4AA]/25'
                           : isProbation
                           ? 'bg-[#FF4D6A]/10 text-[#FF8FA3] border border-[#FF4D6A]/25'
                           : 'bg-amber-400/10 text-amber-300 border border-amber-400/25'
                       }`}
                     >
-                      {isHealthy ? (
+                      {isEtfHolding ? (
+                        <ShieldCheck size={12} />
+                      ) : isHealthy ? (
                         <CheckCircle2 size={12} />
                       ) : isProbation ? (
                         <ShieldAlert size={12} />

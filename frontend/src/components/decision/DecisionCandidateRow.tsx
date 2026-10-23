@@ -16,6 +16,7 @@ export type Idea = {
   checks: Check[]
   passes_strict: boolean
   verdict: string
+  is_etf?: boolean
   aura: {
     sentiment?: number | null
     conviction?: number | null

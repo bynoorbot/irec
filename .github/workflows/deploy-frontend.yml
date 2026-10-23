@@ -36,6 +36,23 @@ jobs:
           NEXT_PUBLIC_BACKEND_URL: ${{ vars.NEXT_PUBLIC_BACKEND_URL }}
           NEXT_PUBLIC_OWNER_EMAIL: ${{ vars.NEXT_PUBLIC_OWNER_EMAIL }}
 
+      - name: Clean up legacy DNS record if present
+        run: |
+          ZONE_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=bynoor.io" \
+            -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+            -H "Content-Type: application/json" | jq -r '.result[0].id // empty')
+          if [ -n "$ZONE_ID" ]; then
+            RECORD_ID=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records?name=aura.bynoor.io" \
+              -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+              -H "Content-Type: application/json" | jq -r '.result[0].id // empty')
+            if [ -n "$RECORD_ID" ]; then
+              echo "Deleting legacy DNS record $RECORD_ID for aura.bynoor.io..."
+              curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/dns_records/$RECORD_ID" \
+                -H "Authorization: Bearer ${{ secrets.CLOUDFLARE_API_TOKEN }}" \
+                -H "Content-Type: application/json"
+            fi
+          fi || true
+
       - name: Deploy to Cloudflare Workers
         run: npx wrangler deploy
         working-directory: frontend

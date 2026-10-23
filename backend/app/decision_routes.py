@@ -367,8 +367,47 @@ async def decision_etf(body: EtfRequest, authorization: str = Header(None), _own
             "etf_whitelist": state["etf_whitelist"]}
 
 
+SNAPSHOT_TTL = 6 * 3600
+
+
+def fingerprint_state(state: Dict[str, Any]) -> str:
+    import hashlib, json
+    core = {"never": sorted(state.get("never", [])),
+            "not_now": sorted(n.get("ticker") for n in state.get("not_now", [])),
+            "etf": sorted(state.get("etf_whitelist", []))}
+    return hashlib.sha256(json.dumps(core, sort_keys=True).encode()).hexdigest()[:16]
+
+
+def snapshot_is_fresh(snapshot: Optional[Dict[str, Any]], now: float, sheet_asof: Optional[str], fingerprint: str) -> bool:
+    if not snapshot:
+        return False
+    if now - float(snapshot.get("computed_at") or 0) > SNAPSHOT_TTL:
+        return False
+    return snapshot.get("sheet_asof") == sheet_asof and snapshot.get("fingerprint") == fingerprint
+
+
+async def _load_snapshot(uid: str) -> Optional[Dict[str, Any]]:
+    try:
+        res = _get_client().table("api_cache").select("payload").eq("cache_key", f"decision_snapshot:{uid}").execute()
+        if res.data and isinstance(res.data[0].get("payload"), dict):
+            return res.data[0]["payload"]
+    except Exception as e:
+        logger.warning(f"decision snapshot read failed: {e}")
+    return None
+
+
+async def _save_snapshot(uid: str, snapshot: Dict[str, Any]) -> None:
+    try:
+        _get_client().table("api_cache").upsert({
+            "cache_key": f"decision_snapshot:{uid}", "payload": snapshot,
+            "last_updated": datetime.now(timezone.utc).isoformat(),
+        }).execute()
+    except Exception as e:
+        logger.warning(f"decision snapshot write failed: {e}")
+
+
 @router.get("/")
-async def get_decision(authorization: str = Header(None), _owner: str = Depends(verify_owner)):
+async def get_decision(authorization: str = Header(None), fresh: bool = False, _owner: str = Depends(verify_owner)):
     uid = _user_id(authorization)
     if not uid:
         raise HTTPException(status_code=401, detail="User ID not found in token")
@@ -381,6 +420,12 @@ async def get_decision(authorization: str = Header(None), _owner: str = Depends(
     holdings_raw = [p for p in (pres.data or []) if (p.get("shares") or 0) > 0]
     total_value = sum((p.get("shares") or 0) * (p.get("current_price") or p.get("average_cost") or 0) for p in holdings_raw)
     sheet_asof = max((p.get("updated_at") or "" for p in holdings_raw), default=None)
+
+    fingerprint = fingerprint_state(state)
+    if not fresh:
+        snap = await _load_snapshot(uid)
+        if snapshot_is_fresh(snap, time.time(), sheet_asof, fingerprint) and snap.get("payload"):
+            return {**snap["payload"], "state": state, "served_from_cache": True}
 
     aura = aura_aggregates()
     held_set = {p["ticker"] for p in holdings_raw}
@@ -473,6 +518,8 @@ async def get_decision(authorization: str = Header(None), _owner: str = Depends(
                "this_week": this_week, "sectors": sectors, "candidates": candidates[:7],
                "holdings": sorted(holdings, key=lambda x: x["weight_pct"], reverse=True), "alerts": alerts,
                "state": state, "benchmark_note": "Stock picks as a group must beat the approved Shariah ETF over rolling periods, or weight shifts back to ETF."}
+    await _save_snapshot(uid, {"computed_at": time.time(), "sheet_asof": sheet_asof,
+                               "fingerprint": fingerprint, "payload": payload})
     try:
         full_state = await _load_state(uid)
         entry = {"action": this_week["action"], "ticker": this_week["ticker"],
@@ -480,7 +527,7 @@ async def get_decision(authorization: str = Header(None), _owner: str = Depends(
         await _save_state(uid, {**full_state, "log": ([entry] + full_state.get("log", []))[:30]})
     except Exception as e:
         logger.warning(f"decision log write skipped: {e}")
-    return payload
+    return {**payload, "served_from_cache": False}
 
 
 @router.get("/log")

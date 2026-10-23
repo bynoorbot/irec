@@ -66,6 +66,21 @@ def test_not_now_names_are_excluded_from_candidates():
     assert picked == []
 
 
+def test_snapshot_served_only_when_fresh_and_inputs_unchanged():
+    """Page loads must serve the cached snapshot, not refetch everything."""
+    from app.decision_routes import fingerprint_state, snapshot_is_fresh
+
+    state = {"never": ["TSLA"], "not_now": [], "etf_whitelist": ["ISDU"]}
+    snap = {"computed_at": 1_000_000, "sheet_asof": "2026-10-20", "fingerprint": fingerprint_state(state)}
+    assert snapshot_is_fresh(snap, now=1_000_000 + 3600, sheet_asof="2026-10-20", fingerprint=fingerprint_state(state)) is True
+    # Expired (>6h), stale sheet, or changed lists must all force recompute.
+    assert snapshot_is_fresh(snap, now=1_000_000 + 7 * 3600, sheet_asof="2026-10-20", fingerprint=fingerprint_state(state)) is False
+    assert snapshot_is_fresh(snap, now=1_000_000 + 60, sheet_asof="2026-10-23", fingerprint=fingerprint_state(state)) is False
+    changed = fingerprint_state({**state, "never": []})
+    assert snapshot_is_fresh(snap, now=1_000_000 + 60, sheet_asof="2026-10-20", fingerprint=changed) is False
+    assert snapshot_is_fresh(None, now=1_000_000, sheet_asof="x", fingerprint="y") is False
+
+
 def test_verdicts_and_sector_bands():
     assert verdict_for(11, held=False) == "Master List"
     assert verdict_for(9, held=True) == "Watch"

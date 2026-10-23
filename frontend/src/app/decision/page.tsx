@@ -26,7 +26,7 @@ type Decision = {
   candidates: Idea[]; holdings: Idea[]
   alerts: { ticker: string; type: string; detail: string }[]
   state: { never: string[]; not_now: { ticker: string; reason?: string | null }[]; etf_whitelist: string[] }
-  benchmark_note: string
+  benchmark_note: string; served_from_cache?: boolean
 }
 
 const BACKEND = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
@@ -70,7 +70,7 @@ export default function DecisionPage() {
       const ctrl = new AbortController()
       const timer = setTimeout(() => ctrl.abort(), 120000)
       const [dRes, lRes] = await Promise.all([
-        fetch(`${BACKEND}/api/v1/decision/`, { headers, signal: ctrl.signal }),
+        fetch(`${BACKEND}/api/v1/decision/?fresh=${isRefresh ? 'true' : 'false'}`, { headers, signal: ctrl.signal }),
         fetch(`${BACKEND}/api/v1/decision/log`, { headers }),
       ])
       clearTimeout(timer)
@@ -138,7 +138,7 @@ export default function DecisionPage() {
       </header>
 
       <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#94A3B8]">
-        <span>Generated {new Date(data.generated_at).toLocaleString()}</span>
+        <span>Generated {new Date(data.generated_at).toLocaleString()}</span>{data.served_from_cache && <span className="text-[#00D4AA]">Cached snapshot · Refresh for latest</span>}
         <span aria-hidden="true">·</span><span>{data.market_provisional ? 'Intraday · provisional' : 'After close · official'}</span>
         <span aria-hidden="true">·</span><span>Sheet as of {data.sheet_asof ? new Date(data.sheet_asof).toLocaleDateString() : 'unknown'}</span>
         {staleDays !== null && staleDays > 10 && <span className="flex items-center gap-1 font-medium text-[#FF8FA3]"><AlertTriangle size={13} /> Sheet stale {staleDays}d — update it before acting</span>}

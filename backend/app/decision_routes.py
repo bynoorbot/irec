@@ -21,26 +21,25 @@ from pydantic import BaseModel
 
 from app.auth import verify_owner
 from app.database import _get_client
+from app.ticker_utils import (
+    ALL_KNOWN_ETFS,
+    clean_base_symbol,
+    is_uk_ireland_ticker,
+    parse_ticker,
+    to_yfinance_symbol,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/decision", tags=["decision"])
 
 DEFAULT_ETF_WHITELIST = ["ISDU"]
-KNOWN_ETFS = {
-    # Shariah ETFs (UCITS Ireland, UK & US)
-    "ISDU", "ISWD", "ISUS", "ISDE", "IGDA", "ISDX", "WITS", "SKUK",
-    "SPUS", "HLAL", "UMMA", "SPSK", "SPRE", "KSA", "GLD", "IAU",
-    # Broad & Sector Index ETFs
-    "SPY", "VOO", "IVV", "QQQ", "QQQM", "VTI", "VXUS", "VT", "VEA", "VWO",
-    "SMH", "SOXX", "XLK", "XLE", "XLF", "XLV", "XLI", "XLY", "XLP", "XLU", "XLB", "XLRE",
-    "IWM", "IWF", "IWD", "DIA", "SCHD", "ARKK", "TLT", "BND", "AGG",
-}
+KNOWN_ETFS = ALL_KNOWN_ETFS
 
 
 def is_etf_ticker(ticker: str) -> bool:
     t = (ticker or "").upper().strip()
-    base = t.split(".")[0].split("-")[0]
-    return t in KNOWN_ETFS or base in KNOWN_ETFS
+    base, yf_sym, _ = parse_ticker(t)
+    return t in ALL_KNOWN_ETFS or base in ALL_KNOWN_ETFS or yf_sym in ALL_KNOWN_ETFS
 
 
 def is_etf(
@@ -51,9 +50,11 @@ def is_etf(
     whitelist: Optional[set] = None,
 ) -> bool:
     t = (ticker or "").upper().strip()
-    base = t.split(".")[0].split("-")[0]
-    if whitelist and (t in whitelist or base in whitelist):
-        return True
+    base, yf_sym, _ = parse_ticker(t)
+    if whitelist:
+        clean_wl = {clean_base_symbol(w) for w in whitelist}
+        if t in whitelist or base in clean_wl or yf_sym in whitelist:
+            return True
     if is_etf_ticker(t):
         return True
     sec = (sector_text or "").lower().strip()
@@ -80,9 +81,9 @@ BUCKET_TICKERS: Dict[str, set] = {
     "Cybersecurity": {"CRWD", "PANW", "ZS", "FTNT", "NET", "S", "OKTA"},
     "AI Software & SaaS": {"CRM", "PLTR", "ADBE", "NOW", "INTU", "WDAY", "SHOP", "APP", "DUOL", "HUBS", "TEAM"},
     "Big Tech Platforms": {"AAPL", "META", "NFLX", "UBER", "ABNB", "BKNG"},
-    "Healthcare": {"LLY", "UNH", "JNJ", "MRK", "ABBV", "AMGN", "TMO", "DHR", "ISRG", "VRTX", "REGN", "SYK", "BSX"},
-    "Industrials & Energy Transition": {"CAT", "GE", "HON", "ETN", "TSLA", "ENPH", "FSLR", "NEE", "WM", "DE", "RTX", "LMT"},
-    "Consumer": {"WMT", "COST", "HD", "PG", "KO", "PEP", "MCD", "SBUX", "NKE", "LULU", "TJX", "LOW"},
+    "Healthcare": {"LLY", "UNH", "JNJ", "MRK", "ABBV", "AMGN", "TMO", "DHR", "ISRG", "VRTX", "REGN", "SYK", "BSX", "AZN", "GSK"},
+    "Industrials & Energy Transition": {"CAT", "GE", "HON", "ETN", "TSLA", "ENPH", "FSLR", "NEE", "WM", "DE", "RTX", "LMT", "SHEL", "BP", "RR", "CRH"},
+    "Consumer": {"WMT", "COST", "HD", "PG", "KO", "PEP", "MCD", "SBUX", "NKE", "LULU", "TJX", "LOW", "ULVR", "DGE", "BATS"},
 }
 BUCKETS = list(BUCKET_TICKERS.keys()) + ["Other"]
 
@@ -91,23 +92,23 @@ _FUND_TTL = 6 * 3600
 
 
 def bucket_for(ticker: str, sector_text: Optional[str] = None) -> str:
-    t = (ticker or "").upper()
-    base = t.split(".")[0].split("-")[0]
+    t = (ticker or "").upper().strip()
+    base, _, _ = parse_ticker(t)
     s = (sector_text or "").lower()
     if s in ("etf", "etfs", "fund", "funds", "exchange traded fund", "index fund") or is_etf_ticker(t):
         return "ETF Base"
     for bucket, tickers in BUCKET_TICKERS.items():
-        if t in tickers:
+        if t in tickers or base in tickers:
             return bucket
     if "semiconductor" in s:
         return "Semis & AI Infra"
     if "security" in s or "cyber" in s:
         return "Cybersecurity"
-    if "health" in s or "pharma" in s or "biotech" in s:
+    if "health" in s or "pharma" in s or "biotech" in s or "medical" in s:
         return "Healthcare"
     if "consumer" in s or "retail" in s:
         return "Consumer"
-    if "industrial" in s or "energy" in s or "material" in s or "utilit" in s:
+    if "industrial" in s or "energy" in s or "material" in s or "utilit" in s or "aerospace" in s or "defense" in s or "oil" in s:
         return "Industrials & Energy Transition"
     if "software" in s:
         return "AI Software & SaaS"
@@ -229,7 +230,24 @@ def verdict_for(score: int, held: bool) -> str:
 def select_candidates(aura: Dict[str, Dict[str, Any]], held: set, never: set, not_now: set, limit: int = 12) -> List[str]:
     """Idea-feed candidates: exclude held, Never, Not-now (parked), and ETFs."""
     ranked = sorted(aura.items(), key=lambda kv: ((kv[1].get("mentions_30d") or 0), (kv[1].get("conviction") or 0)), reverse=True)
-    return [t for t, _a in ranked if t not in held and t not in never and t not in not_now and not is_etf_ticker(t)][:limit]
+    clean_held = {clean_base_symbol(h) for h in held}
+    clean_never = {clean_base_symbol(n) for n in never}
+    clean_not_now = {clean_base_symbol(nn) for nn in not_now}
+    out = []
+    for t, _a in ranked:
+        base = clean_base_symbol(t)
+        if t in held or base in clean_held:
+            continue
+        if t in never or base in clean_never:
+            continue
+        if t in not_now or base in clean_not_now:
+            continue
+        if is_etf_ticker(t):
+            continue
+        out.append(t)
+        if len(out) >= limit:
+            break
+    return out
 
 
 def sector_verdict(score: float) -> str:
@@ -251,7 +269,12 @@ def _user_id(authorization: Optional[str]) -> Optional[str]:
 def _fetch_info(ticker: str) -> Dict[str, Any]:
     try:
         import yfinance as yf
-        return yf.Ticker(ticker).info or {}
+        yf_sym = to_yfinance_symbol(ticker)
+        res = yf.Ticker(yf_sym).info or {}
+        # If Yahoo Finance returns empty on base symbol, and not already tried with .L, try with .L
+        if not res and not yf_sym.endswith(".L"):
+            res = yf.Ticker(f"{yf_sym}.L").info or {}
+        return res
     except Exception as e:
         logger.warning(f"fundamentals fetch failed {ticker}: {e}")
         return {}
@@ -435,7 +458,7 @@ def fingerprint_state(state: Dict[str, Any]) -> str:
     core = {"never": sorted(state.get("never", [])),
             "not_now": sorted(n.get("ticker") for n in state.get("not_now", [])),
             "etf": sorted(state.get("etf_whitelist", [])),
-            "v": "etf_v2"}
+            "v": "lon_uk_v3"}
     return hashlib.sha256(json.dumps(core, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -495,11 +518,12 @@ async def get_decision(authorization: str = Header(None), fresh: bool = False, _
     fund = fetch_fundamentals(sorted(held_set) + cand_tickers)
 
     def build(ticker: str, held_row: Optional[dict]) -> Dict[str, Any]:
-        a = aura.get(ticker) or {}
+        base_t = clean_base_symbol(ticker)
+        a = aura.get(ticker) or aura.get(base_t) or aura.get(f"{base_t}.L") or {}
         mom = {}
         if held_row:
             mom = {"price": held_row.get("current_price"), "weekly": held_row.get("weekly_change_pct"), "monthly": held_row.get("monthly_change_pct")}
-        info = fund.get(ticker) or {}
+        info = fund.get(ticker) or fund.get(to_yfinance_symbol(ticker)) or {}
         sector_text = (held_row or {}).get("sector") or info.get("sector")
         cap_size_text = (held_row or {}).get("cap_size")
         is_holding_etf = is_etf(ticker, sector_text, cap_size_text, info, set(etf_whitelist))

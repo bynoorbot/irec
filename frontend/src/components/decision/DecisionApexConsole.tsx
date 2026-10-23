@@ -83,7 +83,7 @@ export function DecisionApexConsole({ thisWeek }: ApexConsoleProps) {
         {/* Action Link & Terminal Deep Link */}
         <div className="shrink-0 flex flex-row md:flex-col items-center gap-2.5">
           <Link
-            href={`/ticker?ticker=${thisWeek.ticker}`}
+            href={`/ticker?s=${thisWeek.ticker}`}
             className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#00D4AA] px-4 py-2.5 text-xs sm:text-sm font-bold text-[#06251D] shadow-sm transition-all hover:bg-[#00FFD0] hover:shadow-[0_0_20px_rgba(0,212,170,0.3)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00D4AA] active:scale-[0.98]"
           >
             <span>Inspect {thisWeek.ticker}</span>

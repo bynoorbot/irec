@@ -107,3 +107,69 @@ def test_etf_detection_and_bucketing():
     assert bucket_for("HLAL") == "ETF Base"
     assert bucket_for("UNKNOWN", "ETF") == "ETF Base"
 
+
+def test_london_and_ireland_stocks_and_etfs():
+    """Verify London / Ireland tickers with LON: prefix or .L suffix."""
+    from app.decision_routes import bucket_for, is_etf, is_etf_ticker
+    from app.ticker_utils import (
+        clean_base_symbol,
+        is_uk_ireland_ticker,
+        parse_ticker,
+        to_yfinance_symbol,
+    )
+
+    # 1. ETFs with LON: and .L
+    assert is_etf_ticker("LON:ISDU") is True
+    assert is_etf_ticker("lon:isdu") is True
+    assert is_etf_ticker("ISDU.L") is True
+    assert is_etf_ticker("isdu.l") is True
+    assert is_etf_ticker("LON:WITS") is True
+    assert is_etf_ticker("WITS.L") is True
+    assert is_etf_ticker("LSE:SKUK") is True
+    assert is_etf_ticker("SKUK.L") is True
+    assert is_etf_ticker("LON:IGDA") is True
+    assert is_etf_ticker("IGDA.L") is True
+    assert is_etf_ticker("LON:ISWD") is True
+    assert is_etf_ticker("ISWD.L") is True
+
+    # 2. Stocks with LON: and .L are NOT ETFs
+    assert is_etf_ticker("LON:AZN") is False
+    assert is_etf_ticker("AZN.L") is False
+    assert is_etf_ticker("LON:ULVR") is False
+    assert is_etf_ticker("ULVR.L") is False
+    assert is_etf_ticker("LON:SHEL") is False
+    assert is_etf_ticker("SHEL.L") is False
+
+    # 3. Proper bucketing
+    assert bucket_for("LON:ISDU") == "ETF Base"
+    assert bucket_for("ISDU.L") == "ETF Base"
+    assert bucket_for("LON:WITS") == "ETF Base"
+    assert bucket_for("LON:AZN") == "Healthcare"
+    assert bucket_for("AZN.L") == "Healthcare"
+    assert bucket_for("LON:ULVR") == "Consumer"
+    assert bucket_for("ULVR.L") == "Consumer"
+    assert bucket_for("LON:SHEL") == "Industrials & Energy Transition"
+    assert bucket_for("SHEL.L") == "Industrials & Energy Transition"
+
+    # 4. Symbol parsing and yfinance mapping
+    assert to_yfinance_symbol("LON:ISDU") == "ISDU.L"
+    assert to_yfinance_symbol("LON:AZN") == "AZN.L"
+    assert to_yfinance_symbol("lon:ulvr") == "ULVR.L"
+    assert to_yfinance_symbol("ISDU.L") == "ISDU.L"
+    assert to_yfinance_symbol("AZN.L") == "AZN.L"
+    assert to_yfinance_symbol("SPUS") == "SPUS"
+    assert to_yfinance_symbol("NVDA") == "NVDA"
+
+    assert clean_base_symbol("LON:ISDU") == "ISDU"
+    assert clean_base_symbol("lon:isdu") == "ISDU"
+    assert clean_base_symbol("ISDU.L") == "ISDU"
+    assert clean_base_symbol("LON:AZN") == "AZN"
+    assert clean_base_symbol("AZN.L") == "AZN"
+
+    assert is_uk_ireland_ticker("LON:AZN") is True
+    assert is_uk_ireland_ticker("AZN.L") is True
+    assert is_uk_ireland_ticker("LON:ISDU") is True
+    assert is_uk_ireland_ticker("ISDU.L") is True
+    assert is_uk_ireland_ticker("NVDA") is False
+
+

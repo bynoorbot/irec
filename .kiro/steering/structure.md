@@ -34,7 +34,7 @@
 │
 ├── .github/workflows/          # CI/CD pipelines
 │   ├── deploy-backend.yml      # Backend → Cloud Run
-│   └── deploy-frontend.yml     # Frontend → static hosting
+│   └── deploy-worker.yml       # Transcript proxy → Cloudflare Worker
 │
 └── .kiro/
     ├── specs/                  # Feature specifications

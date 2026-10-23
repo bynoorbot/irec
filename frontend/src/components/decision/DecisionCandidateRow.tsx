@@ -74,7 +74,7 @@ export function DecisionCandidateRow({ candidate: c, isBusy, onDismiss }: Candid
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 flex-wrap">
               <Link
-                href={`/ticker?ticker=${c.ticker}`}
+                href={`/ticker?s=${c.ticker}`}
                 className="font-mono text-xl sm:text-2xl font-black text-[#F1F5F9] transition-colors hover:text-[#00FFD0] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#00D4AA] rounded"
               >
                 {c.ticker}

@@ -3,6 +3,8 @@ import logging
 from datetime import datetime, timezone
 import yfinance as yf
 
+from app.ticker_utils import to_yfinance_symbol
+
 logger = logging.getLogger(__name__)
 
 # Simple in-memory cache to avoid redundant yfinance calls.
@@ -43,7 +45,8 @@ async def validate_tickers_live(tickers: list[str]) -> dict[str, TickerInfo | No
         fetched = {}
         for t in to_fetch:
             try:
-                ticker_obj = yf.Ticker(t)
+                yf_t = to_yfinance_symbol(t)
+                ticker_obj = yf.Ticker(yf_t)
                 info = ticker_obj.info
                 name = info.get("longName") or info.get("shortName")
                 

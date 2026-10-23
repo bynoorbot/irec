@@ -372,7 +372,9 @@ async def get_stock_performance(symbol: str, range: str = "12M"):
     yf_range = range_map.get(range, "1y")
     
     try:
-        ticker = yf.Ticker(symbol)
+        from app.ticker_utils import to_yfinance_symbol
+        yf_symbol = to_yfinance_symbol(symbol)
+        ticker = yf.Ticker(yf_symbol)
         hist = ticker.history(period=yf_range)
         
         if hist.empty:

@@ -94,6 +94,7 @@ export function DecisionHoldingsTable({ holdings, alerts }: HoldingsTableProps) 
           <tbody className="divide-y divide-[#1E293B]">
             {holdings.map((h) => {
               const isEtfHolding = h.bucket === 'ETF Base' || h.verdict === 'Core ETF' || h.is_etf
+              const isUkHolding = h.ticker.toUpperCase().startsWith('LON:') || h.ticker.toUpperCase().startsWith('LSE:') || h.ticker.toUpperCase().endsWith('.L')
               const isOverCap = !isEtfHolding && h.weight_pct > 5.0
               const isSevereOverCap = !isEtfHolding && h.weight_pct >= 5.5
               const isHealthy = h.verdict === 'Healthy' || h.verdict === 'Core ETF'
@@ -107,12 +108,19 @@ export function DecisionHoldingsTable({ holdings, alerts }: HoldingsTableProps) 
                   {/* Holding & Bucket */}
                   <td className="px-4 py-3">
                     <div className="flex flex-col">
-                      <Link
-                        href={`/ticker?ticker=${h.ticker}`}
-                        className="font-mono font-bold text-[#F1F5F9] hover:text-[#00FFD0] transition-colors"
-                      >
-                        {h.ticker}
-                      </Link>
+                      <div className="flex items-center gap-1.5">
+                        <Link
+                          href={`/ticker?s=${h.ticker}`}
+                          className="font-mono font-bold text-[#F1F5F9] hover:text-[#00FFD0] transition-colors"
+                        >
+                          {h.ticker}
+                        </Link>
+                        {isUkHolding && (
+                          <span className="rounded bg-sky-500/15 border border-sky-500/30 px-1 py-0.2 font-mono text-[9px] font-medium text-sky-300" title="London / Ireland Listed">
+                            LSE
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[11px] text-[#8B95A8] truncate max-w-[140px]">
                         {h.bucket}
                       </span>
@@ -199,7 +207,7 @@ export function DecisionHoldingsTable({ holdings, alerts }: HoldingsTableProps) 
                   {/* Action Link */}
                   <td className="px-4 py-3 text-right">
                     <Link
-                      href={`/ticker?ticker=${h.ticker}`}
+                      href={`/ticker?s=${h.ticker}`}
                       className="inline-flex items-center gap-1 text-xs font-semibold text-[#8B95A8] hover:text-[#00FFD0] transition-colors focus-visible:outline-none focus-visible:underline"
                     >
                       <span>Terminal</span>

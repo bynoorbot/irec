@@ -209,6 +209,14 @@ async def sync_portfolio(
         raw_cap = str(row[cap_size_idx]).strip() if cap_size_idx != -1 and len(row) > cap_size_idx else None
         cap_size = classify_cap_size(raw_cap)
 
+        from app.ticker_utils import ALL_KNOWN_ETFS, parse_ticker
+        base_sym, yf_sym, _ = parse_ticker(ticker)
+        if ticker in ALL_KNOWN_ETFS or base_sym in ALL_KNOWN_ETFS or yf_sym in ALL_KNOWN_ETFS:
+            if not sector:
+                sector = "ETF"
+            if not cap_size or cap_size == "Unknown":
+                cap_size = "ETF"
+
         if ticker not in portfolio_agg:
             portfolio_agg[ticker] = {
                 "shares": 0.0, 

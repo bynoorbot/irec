@@ -71,6 +71,7 @@ export default function GoPage() {
   const links = [
     { name: 'Home / Dashboard', href: '/', icon: Home, desc: 'Main user-facing app' },
     { name: 'Portfolio', href: '/portfolio', icon: Briefcase, desc: 'View and sync your holdings' },
+    { name: "This Week's Decision", href: '/decision', icon: Briefcase, desc: 'Owner-only weekly decision: stock vs Shariah ETF, sector ranking, scorecards' },
     { name: 'Fix Token (Re-Login)', href: '/admin/login?next=/portfolio', icon: LogIn, desc: 'Refresh Google Sheets access' },
     { name: 'Admin Hub', href: '/admin', icon: LayoutDashboard, desc: 'Central admin overview' },
     { name: 'Manage Data', href: '/admin/manage', icon: Database, desc: 'Channels, Videos, Stocks' },

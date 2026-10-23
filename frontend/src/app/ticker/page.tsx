@@ -165,11 +165,11 @@ function TickerContent() {
   const [recommendations, setRecommendations] = useState<Recommendation[]>([])
   const [radars, setRadars] = useState<RadarResponse[]>([])
   const [position, setPosition] = useState<UserPosition | null>(null)
-  const [isPositionExpanded, setIsPositionExpanded] = useState<boolean>(false)
+  const [isPositionExpanded, setIsPositionExpanded] = useState<boolean>(true)
   const [loading, setLoading] = useState(true)
   const [showMoreLinks, setShowMoreLinks] = useState(false)
 
-  const isInvalid = !parsed.base || parsed.raw.length > 16 || !/^[A-Za-z0-9.:-]+$/.test(parsed.raw)
+  const isInvalid = !parsed.base || parsed.raw.length > 20 || !/^[A-Za-z0-9.:-]+$/.test(parsed.raw)
 
   useEffect(() => {
     async function fetchData() {
@@ -180,7 +180,17 @@ function TickerContent() {
 
       setLoading(true)
       const searchCandidates = Array.from(
-        new Set([parsed.raw, parsed.base, parsed.yf, `${parsed.base}.L`].filter(Boolean))
+        new Set([
+          parsed.raw,
+          parsed.raw.toUpperCase(),
+          parsed.base,
+          parsed.base.toUpperCase(),
+          parsed.yf,
+          parsed.yf.toUpperCase(),
+          `${parsed.base}.L`,
+          `LON:${parsed.base}`,
+          `LSE:${parsed.base}`,
+        ].filter(Boolean))
       )
       try {
         const supabase = createClient()
@@ -262,12 +272,30 @@ function TickerContent() {
         const supabase = createClient()
         const { data: { session } } = await supabase.auth.getSession()
         if (session) {
+          // Attempt 1: Direct Supabase query
           const { data } = await supabase
             .from("user_portfolio")
             .select("*")
             .in("ticker", searchCandidates)
             .maybeSingle()
-          if (data) setPosition(data)
+          
+          if (data) {
+            setPosition(data as UserPosition)
+          } else {
+            // Attempt 2: Fallback to backend portfolio endpoint (bypasses RLS with service key)
+            const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+            const portRes = await fetch(`${backendUrl}/api/v1/portfolio/`, {
+              headers: { 'Authorization': `Bearer ${session.access_token}` }
+            }).then(r => r.ok ? r.json() : null).catch(() => null)
+
+            if (portRes && Array.isArray(portRes.portfolio)) {
+              const matched = portRes.portfolio.find((p: any) =>
+                searchCandidates.includes(p.ticker) ||
+                searchCandidates.includes(p.ticker?.toUpperCase())
+              )
+              if (matched) setPosition(matched as UserPosition)
+            }
+          }
         }
       } catch (error) {
         console.error("Failed to fetch user position:", error)
@@ -290,22 +318,31 @@ function TickerContent() {
     )
   }
 
-  if (isInvalid || recommendations.length === 0) {
+  if (isInvalid) {
     return (
       <div className="min-h-screen px-4 py-8 md:px-8 md:py-12">
         <div className="max-w-6xl mx-auto">
           <h1 className="mt-8 font-[family-name:var(--font-geist-mono)] text-5xl md:text-7xl font-bold tracking-tight text-[#F1F5F9]">
-            {symbol?.toUpperCase() || '?'}
+            {parsed.raw?.toUpperCase() || '?'}
           </h1>
-          <p className="mt-4 text-lg text-[#8B95A8]">No data available for this symbol.</p>
+          <p className="mt-4 text-lg text-[#8B95A8]">Invalid ticker symbol format.</p>
+          <div className="mt-6">
+            <Link
+              href="/explore"
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold bg-[#141B2D] text-[#00D4AA] border border-[#00D4AA]/30 hover:bg-[#00D4AA]/10 transition-colors"
+            >
+              Browse Stock Explorer →
+            </Link>
+          </div>
         </div>
       </div>
     )
   }
 
   // Compute aggregate stats for this ticker
-  const avgSentiment = recommendations.reduce((s, r) => s + r.sentiment, 0) / recommendations.length
-  const avgConviction = recommendations.reduce((s, r) => s + conviction100(r), 0) / (recommendations.length || 1)
+  const hasRecs = recommendations.length > 0
+  const avgSentiment = hasRecs ? recommendations.reduce((s, r) => s + r.sentiment, 0) / recommendations.length : 0
+  const avgConviction = hasRecs ? recommendations.reduce((s, r) => s + conviction100(r), 0) / (recommendations.length || 1) : 0
   const prices = recommendations.filter(r => r.target_price !== null).map(r => r.target_price!)
   const rawAvgPrice = prices.length > 0 ? prices.reduce((s, p) => s + p, 0) / prices.length : null
   const avgPrice = rawAvgPrice !== null ? Math.round(rawAvgPrice) : null
@@ -319,8 +356,8 @@ function TickerContent() {
     }))
 
   // Consensus score (same formula as homepage — trust-weighted + confidence-dampened)
-  const weightedSum = recommendations.reduce((s, r) => s + r.sentiment * r.videos.channels.trust_weight, 0)
-  const totalWeight = recommendations.reduce((s, r) => s + r.videos.channels.trust_weight, 0)
+  const weightedSum = hasRecs ? recommendations.reduce((s, r) => s + r.sentiment * (r.videos?.channels?.trust_weight || 1), 0) : 0
+  const totalWeight = hasRecs ? recommendations.reduce((s, r) => s + (r.videos?.channels?.trust_weight || 1), 0) : 0
   const rawWeightedSentiment = totalWeight > 0 ? weightedSum / totalWeight : 0
   const confidence = Math.min(recommendations.length / 3, 1)
   const consensusSentiment = Math.round(rawWeightedSentiment * confidence * 100) / 100
@@ -337,12 +374,29 @@ function TickerContent() {
             {/* Left side: Ticker, Name, Radars */}
             <div className="flex flex-col gap-4 flex-1">
               <div className="flex flex-col">
-                <h1 className="font-[family-name:var(--font-geist-mono)] text-5xl md:text-7xl font-bold tracking-tight text-[#F1F5F9] leading-none">
-                  {symbol.toUpperCase()}
-                </h1>
-                {recommendations[0]?.stock_name && (
-                  <p className="mt-2 text-lg text-[#8B95A8] font-semibold">{recommendations[0].stock_name}</p>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <h1 className="font-[family-name:var(--font-geist-mono)] text-5xl md:text-7xl font-bold tracking-tight text-[#F1F5F9] leading-none">
+                    {parsed.base || symbol.toUpperCase()}
+                  </h1>
+                  {parsed.isUk && (
+                    <span className="px-2.5 py-1 rounded-md text-xs font-bold font-mono tracking-wider bg-sky-500/10 text-sky-400 border border-sky-500/20">
+                      LSE
+                    </span>
+                  )}
+                  {position?.sector && (
+                    <span className="px-2.5 py-1 rounded-md text-xs font-semibold font-mono tracking-wider bg-[#141B2D] text-[#8B95A8] border border-white/5">
+                      {position.sector}
+                    </span>
+                  )}
+                </div>
+                {parsed.isUk && parsed.raw !== parsed.base && (
+                  <span className="text-xs font-mono text-[#64748B] mt-1">{parsed.raw}</span>
                 )}
+                {recommendations[0]?.stock_name ? (
+                  <p className="mt-2 text-lg text-[#8B95A8] font-semibold">{recommendations[0].stock_name}</p>
+                ) : position ? (
+                  <p className="mt-2 text-sm text-[#8B95A8] font-medium">Portfolio Holding • {position.sector || 'Equities'}</p>
+                ) : null}
               </div>
 
               {activeRadars.length > 0 && (
@@ -848,29 +902,71 @@ function TickerContent() {
 
 
 
-        {/* Unified Analyst Consensus & Target Corridor Console */}
-        <div className="mb-10 animate-fade-up stagger-2">
-          <TargetCorridor
-            prices={prices}
-            avgPrice={avgPrice}
-            ticker={symbol.toUpperCase()}
-            targets={targets}
-            totalRecommendations={recommendations.length}
-            rawSentiment={avgSentiment}
-            consensusSentiment={consensusSentiment}
-            avgConviction={avgConviction}
-          />
-        </div>
+        {/* Unified Analyst Consensus & Target Corridor Console or Unindexed Status */}
+        {hasRecs ? (
+          <div className="mb-10 animate-fade-up stagger-2">
+            <TargetCorridor
+              prices={prices}
+              avgPrice={avgPrice}
+              ticker={parsed.base || symbol.toUpperCase()}
+              targets={targets}
+              totalRecommendations={recommendations.length}
+              rawSentiment={avgSentiment}
+              consensusSentiment={consensusSentiment}
+              avgConviction={avgConviction}
+            />
+          </div>
+        ) : (
+          <div className="mb-10 rounded-2xl bg-[#141B2D]/70 backdrop-blur-xl border border-white/5 p-6 sm:p-8 relative overflow-hidden shadow-xl animate-fade-up stagger-2">
+            <div className="absolute top-0 right-0 w-64 h-64 bg-[#00D4AA]/5 blur-3xl rounded-full pointer-events-none" />
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-5 relative z-10">
+              <div className="flex items-start gap-4">
+                <div className="w-11 h-11 rounded-xl bg-[#0A0F1A] border border-white/10 flex items-center justify-center shrink-0 text-[#00D4AA] shadow-inner">
+                  <Activity className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-1 flex-wrap">
+                    <span className="text-[10px] font-bold tracking-[0.2em] uppercase text-[#00D4AA] font-[family-name:var(--font-geist-mono)]">
+                      Analyst Coverage Status
+                    </span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-[#1E293B] text-[#8B95A8]">
+                      No YouTube Signals in Window
+                    </span>
+                  </div>
+                  <h3 className="text-base sm:text-lg font-bold text-[#F1F5F9]">
+                    Aura Has Not Yet Indexed Creator Coverage for {parsed.base || symbol}
+                  </h3>
+                  <p className="mt-1 text-xs sm:text-sm text-[#8B95A8] max-w-2xl leading-relaxed">
+                    Aura aggregates conviction from 20+ top YouTube equity analysts. Our indexed creators have not published a dedicated target or thesis for this asset in the active trailing window. Live technical charts, valuation data, and your portfolio tracking are active below.
+                  </p>
+                </div>
+              </div>
+              <a
+                href={`https://www.youtube.com/results?search_query=${encodeURIComponent((parsed.base || symbol) + ' stock analysis')}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-semibold font-[family-name:var(--font-geist-mono)] bg-[#1E293B] hover:bg-[#283548] text-[#F1F5F9] border border-white/5 hover:border-white/10 transition-all shrink-0"
+              >
+                <svg className="w-4 h-4 text-red-500" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                </svg>
+                <span>Search YouTube</span>
+              </a>
+            </div>
+          </div>
+        )}
 
         {/* Institutional Tabbed Analytics Dock */}
         <div className="mb-10 animate-fade-up stagger-3">
-          <TickerAnalyticsDock symbol={symbol} sentiment={avgSentiment} />
+          <TickerAnalyticsDock symbol={parsed.raw || symbol} sentiment={avgSentiment} />
         </div>
 
         {/* Analyst Signals Section: Interactive Ledger with Filter, Sort, & Dual View Modes */}
-        <div className="animate-fade-up stagger-3">
-          <TickerSignalsLedger recommendations={recommendations} symbol={symbol} />
-        </div>
+        {hasRecs && (
+          <div className="animate-fade-up stagger-3">
+            <TickerSignalsLedger recommendations={recommendations} symbol={parsed.base || symbol} />
+          </div>
+        )}
       </div>
     </div>
   )

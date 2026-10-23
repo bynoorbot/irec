@@ -2,10 +2,26 @@
 import React, { useEffect, useRef, useState } from 'react';
 
 // Maps internal ticker symbols to TradingView compatible symbols
-const mapTVSymbol = (sym: string) => {
-  if (sym === 'BRK-B') return 'BRK.B';
-  if (sym === 'BRK-A') return 'BRK.A';
-  return sym;
+export const mapTVSymbol = (sym: string): string => {
+  if (!sym) return '';
+  const clean = sym.trim().toUpperCase();
+  if (clean === 'BRK-B') return 'BRK.B';
+  if (clean === 'BRK-A') return 'BRK.A';
+
+  // London / Irish stocks & ETFs: TradingView format is LSE:TICKER
+  for (const prefix of ['LON:', 'LSE:', 'LON.', 'LSE.', 'ISE:', 'DUB:']) {
+    if (clean.startsWith(prefix)) {
+      const base = clean.slice(prefix.length).trim();
+      return `LSE:${base}`;
+    }
+  }
+  for (const suffix of ['.L', '.LON', '.LSE', '.IL', '.IR']) {
+    if (clean.endsWith(suffix)) {
+      const base = clean.slice(0, -suffix.length).trim();
+      return `LSE:${base}`;
+    }
+  }
+  return clean;
 };
 
 // 1. Symbol Overview Chart (More illustrative, native ranges)

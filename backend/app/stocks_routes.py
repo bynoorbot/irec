@@ -78,16 +78,9 @@ async def get_stocks_directory(request: Request, response: Response, fresh: bool
         tickers = [m["ticker"] for m in meta_data]
         
         # Get names, sentiment, targets, conviction, published_at, and channels from recommendations
-        # Note: We must paginate because there can be >1000 recommendations and Supabase defaults to 1000.
-        recs_data = []
-        page_size = 1000
-        for i in range(20): # handle up to 20,000 recommendations
-            res = client.table("recommendations").select("ticker, stock_name, sentiment, sentiment_score, target_price, conviction_level, conviction_score, videos!inner(published_at, channels!inner(channel_name, trust_weight))").range(i * page_size, (i + 1) * page_size - 1).execute()
-            if not res.data:
-                break
-            recs_data.extend(res.data)
-            if len(res.data) < page_size:
-                break
+        # via the shared scan (Supabase caps each response at 1000 rows).
+        from app.recs_scan import get_shared_recommendations
+        recs_data = await get_shared_recommendations()
         
         names_map = {}
         sentiment_map = {}
@@ -236,29 +229,9 @@ async def get_home_pulse(request: Request, response: Response):
         client = _get_client()
         now = datetime.now(timezone.utc)
         
-        # Querying recommendations and joins
-        # Note: We must paginate because there can be >1000 recommendations and Supabase defaults to 1000.
-        recs_data = []
-        page_size = 1000
-        for i in range(20): # handle up to 20,000 recommendations
-            res = client.table("recommendations").select("""
-                ticker,
-                stock_name,
-                sentiment,
-                sentiment_score,
-                target_price,
-                conviction_level,
-                conviction_score,
-                videos!inner(
-                    channel_id,
-                    channels!inner(trust_weight)
-                )
-            """).range(i * page_size, (i + 1) * page_size - 1).execute()
-            if not res.data:
-                break
-            recs_data.extend(res.data)
-            if len(res.data) < page_size:
-                break
+        # Querying recommendations and joins via the shared scan
+        from app.recs_scan import get_shared_recommendations
+        recs_data = await get_shared_recommendations()
 
         grouped = {}
         for r in recs_data:

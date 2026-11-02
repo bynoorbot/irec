@@ -257,6 +257,7 @@ export default function ChannelsPage() {
   const router = useRouter()
   const [profiles, setProfiles] = useState<ChannelProfile[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [sort, setSort] = useState<SortKey>('activity')
   const [filter, setFilter] = useState<FilterKey>('all')
   const [search, setSearch] = useState('')
@@ -278,6 +279,7 @@ export default function ChannelsPage() {
         )
       } catch (err) {
         console.error('Error fetching channel profiles:', err)
+        setLoadError(true)
       } finally {
         setLoading(false)
       }
@@ -362,6 +364,18 @@ export default function ChannelsPage() {
   return (
     <div className="min-h-screen bg-[#0A0F1A] text-[#E2E8F0] px-4 py-8 md:px-8 md:py-12 pb-28 font-[family-name:var(--font-geist-sans)] selection:bg-[#00D4AA]/30">
       <div className="max-w-6xl mx-auto space-y-10">
+
+        {loadError && (
+          <div className="flex items-center justify-between gap-4 p-4 rounded-2xl bg-[#FF4D6A]/10 border border-[#FF4D6A]/30 text-sm text-[#F1F5F9]">
+            <span>Couldn&apos;t load analyst data from the server.</span>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-3 py-1.5 rounded-lg bg-[#FF4D6A]/15 border border-[#FF4D6A]/40 font-semibold hover:bg-[#FF4D6A]/25 transition-all shrink-0"
+            >
+              Retry
+            </button>
+          </div>
+        )}
 
         {/* ─── Hero Header & Macro Signal Ribbon ─── */}
         <header className="space-y-6 animate-fade-up stagger-1">

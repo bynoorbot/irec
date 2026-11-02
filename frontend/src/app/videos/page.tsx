@@ -521,6 +521,7 @@ function VideoCard({ video, index }: { video: EnrichedVideo; index: number }) {
 export default function VideosPage() {
   const [videos, setVideos] = useState<EnrichedVideo[]>([])
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState(false)
   const [sort, setSort] = useState<SortKey>('newest')
   const [picksFilter, setPicksFilter] = useState<PicksFilter>('all')
   const [sentimentFilter, setSentimentFilter] = useState<SentimentFilter>('')
@@ -538,6 +539,7 @@ export default function VideosPage() {
         setVideos((data.videos || []) as EnrichedVideo[])
       } catch (err) {
         console.error('Error fetching videos feed:', err)
+        setLoadError(true)
       } finally {
         setLoading(false)
       }
@@ -633,6 +635,17 @@ export default function VideosPage() {
   return (
     <main id="main" tabIndex={-1} className="min-h-screen px-4 py-8 md:px-8 md:py-12 outline-none">
       <div className="max-w-5xl mx-auto">
+        {loadError && (
+          <div className="flex items-center justify-between gap-4 p-4 mb-6 rounded-2xl bg-[#FF4D6A]/10 border border-[#FF4D6A]/30 text-sm text-[#F1F5F9]">
+            <span>Couldn&apos;t load videos from the server.</span>
+            <button
+              onClick={() => window.location.reload()}
+              className="px-3 py-1.5 rounded-lg bg-[#FF4D6A]/15 border border-[#FF4D6A]/40 font-semibold hover:bg-[#FF4D6A]/25 transition-all shrink-0"
+            >
+              Retry
+            </button>
+          </div>
+        )}
         {/* Page header */}
         <header className="mt-12 mb-4 animate-fade-up stagger-1">
           <h1 className="text-5xl md:text-7xl font-bold tracking-tight text-[#F1F5F9]">

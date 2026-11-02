@@ -23,7 +23,7 @@ class TierRankingService:
         for i in range(20):
             res = (
                 client.table("recommendations")
-                .select("*, videos!inner(*, channels(*))")
+                .select("ticker, sentiment, sentiment_score, conviction_level, conviction_score, videos!inner(published_at, channels!inner(channel_name))")
                 .gte("videos.published_at", thirty_days_ago)
                 .range(i * page_size, (i + 1) * page_size - 1)
                 .execute()

@@ -396,25 +396,39 @@ export default function ChannelsPage() {
         selectStr: string,
         orderBy?: { column: string; ascending: boolean }
       ): Promise<T[]> {
-        let allData: T[] = []
         const pageSize = 1000
-        let from = 0
-        
-        while (true) {
-          let query = supabase.from(table).select(selectStr).range(from, from + pageSize - 1)
+
+        function pageQuery(from: number, withCount = false) {
+          let query = supabase
+            .from(table)
+            .select(selectStr, withCount ? { count: 'exact' } : undefined)
+            .range(from, from + pageSize - 1)
           if (orderBy) {
             query = query.order(orderBy.column, { ascending: orderBy.ascending })
           }
-          const { data, error } = await query
-          if (error) {
-            console.error(`Error fetching ${table}:`, error)
-            break
+          return query
+        }
+
+        const first = await pageQuery(0, true)
+        if (first.error) {
+          console.error(`Error fetching ${table}:`, first.error)
+          return []
+        }
+        const firstData = (first.data || []) as unknown as T[]
+        const total = first.count ?? firstData.length
+        if (firstData.length < pageSize || total <= pageSize) return firstData
+
+        // Fetch the remaining pages in parallel instead of one round-trip each.
+        const starts: number[] = []
+        for (let from = pageSize; from < total; from += pageSize) starts.push(from)
+        const rest = await Promise.all(starts.map((from) => pageQuery(from)))
+        let allData = [...firstData]
+        for (const page of rest) {
+          if (page.error) {
+            console.error(`Error fetching ${table}:`, page.error)
+            continue
           }
-          if (!data || data.length === 0) break
-          
-          allData = allData.concat(data as unknown as T[])
-          if (data.length < pageSize) break
-          from += pageSize
+          allData = allData.concat((page.data || []) as unknown as T[])
         }
         return allData
       }

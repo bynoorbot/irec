@@ -72,7 +72,7 @@ async def get_stocks_directory(request: Request, response: Response, fresh: bool
         thirty_days_ago = (now - timedelta(days=30)).isoformat()
         
         # Get stock meta
-        meta_res = client.table("stock_meta").select("*").execute()
+        meta_res = client.table("stock_meta").select("ticker, tier, is_pinned, priority_score, mention_count_30d, analyst_count, last_mentioned_at").execute()
         meta_data = meta_res.data or []
         
         tickers = [m["ticker"] for m in meta_data]

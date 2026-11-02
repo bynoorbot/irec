@@ -1,0 +1,119 @@
+name: Fix Cloudflare Builds Root Directory
+
+# One-off: Workers Builds was running `npm run build` at repo root
+# (no package.json) instead of `frontend/`. Sets production + preview
+# root_directory to frontend, then starts a production rebuild.
+on:
+  workflow_dispatch:
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set root_directory=frontend and rebuild
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          ACCOUNTS_RES=$(curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json")
+          ACCOUNT_ID=$(echo "$ACCOUNTS_RES" | jq -r '.result[0].id // empty')
+          if [ -z "$ACCOUNT_ID" ]; then
+            echo "::error::Could not find Cloudflare Account ID: $ACCOUNTS_RES"
+            exit 1
+          fi
+          echo "Account: $ACCOUNT_ID"
+
+          SCRIPTS_RES=$(curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/workers/scripts" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json")
+          WORKER_TAG=$(echo "$SCRIPTS_RES" | jq -r '.result[] | select(.id=="aura") | .tag // empty')
+          if [ -z "$WORKER_TAG" ]; then
+            echo "::error::Could not find Worker tag for aura: $SCRIPTS_RES"
+            exit 1
+          fi
+          echo "Worker aura tag: $WORKER_TAG"
+
+          echo "=== Current build settings ==="
+          BEFORE=$(curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/builds/workers/$WORKER_TAG" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json")
+          echo "$BEFORE" | jq '{
+            success,
+            errors,
+            root: .result.production_settings.root_directory,
+            build: .result.production_settings.build_command,
+            deploy: .result.production_settings.deploy_command,
+            preview_root: .result.previews_base_config.root_directory
+          }'
+
+          echo "=== Patching root_directory to frontend ==="
+          AFTER=$(curl -sS -X PATCH "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/builds/workers/$WORKER_TAG" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "production_settings": {
+                "root_directory": "frontend",
+                "build_command": "npm run build",
+                "deploy_command": "npx wrangler deploy"
+              },
+              "previews_base_config": {
+                "root_directory": "frontend",
+                "build_command": "npm run build",
+                "deploy_command": "npx wrangler preview"
+              }
+            }')
+          echo "$AFTER" | jq '{
+            success,
+            errors,
+            root: .result.production_settings.root_directory,
+            build: .result.production_settings.build_command,
+            deploy: .result.production_settings.deploy_command,
+            preview_root: .result.previews_base_config.root_directory
+          }'
+          echo "$AFTER" | jq -e '.success == true' >/dev/null
+
+          ROOT=$(echo "$AFTER" | jq -r '.result.production_settings.root_directory // empty')
+          if [ "$ROOT" != "frontend" ] && [ "$ROOT" != "/frontend" ] && [ "$ROOT" != "frontend/" ]; then
+            echo "::error::root_directory did not stick (got: '$ROOT')"
+            exit 1
+          fi
+
+          echo "=== Recent builds ==="
+          curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/builds/workers/$WORKER_TAG/builds" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json" \
+            | jq '[.result[:5][] | {
+                build_uuid,
+                status,
+                build_outcome,
+                branch: .build_trigger_metadata.branch,
+                root: .build_trigger_metadata.root_directory,
+                created_on
+              }]'
+
+          echo "=== Triggering production rebuild via triggers API ==="
+          TRIGGERS=$(curl -sS -X GET "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/builds/workers/$WORKER_TAG/triggers" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json" || true)
+          echo "$TRIGGERS" | jq '{success, errors, triggers: [.result[]? | {uuid, branch_includes, root_directory, build_command}]}' || echo "$TRIGGERS"
+
+          TID=$(echo "$TRIGGERS" | jq -r '.result[]? | select((.branch_includes // []) | index("main")) | .uuid' | head -1)
+          if [ -z "$TID" ]; then
+            TID=$(echo "$TRIGGERS" | jq -r '.result[0].uuid // empty')
+          fi
+
+          if [ -n "$TID" ]; then
+            # Prefer authenticated create-build on the trigger
+            BUILD=$(curl -sS -X POST "https://api.cloudflare.com/client/v4/accounts/$ACCOUNT_ID/builds/triggers/$TID/builds" \
+              -H "Authorization: Bearer $CF_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d '{"branch":"main"}' || true)
+            echo "$BUILD" | jq '{success, errors, result}' || echo "$BUILD"
+          else
+            echo "No trigger UUID found; root_directory is fixed — push or deploy-hook needed to rebuild."
+          fi
+
+          echo "Done."

@@ -22,14 +22,14 @@ async def get_radars_from_db() -> List[RadarDefinition]:
     client = _get_client()
 
     # Fetch radars
-    radars_res = client.table("radars").select("*").execute()
+    radars_res = client.table("radars").select("id, name, slug, description, theme_color, icon").execute()
     if not radars_res.data:
         return []
 
     radars_data = radars_res.data
 
     # Fetch all tickers
-    tickers_res = client.table("radar_tickers").select("*").execute()
+    tickers_res = client.table("radar_tickers").select("radar_id, ticker").execute()
     tickers_map = {}
     for row in tickers_res.data:
         rid = row["radar_id"]
@@ -89,7 +89,7 @@ async def get_radar_history(radar_slug: str) -> List[RadarTrendPoint]:
     
     hist_res = (
         client.table("radar_history")
-        .select("*")
+        .select("date, aura_score")
         .eq("radar_id", radar_id)
         .gte("date", thirty_days_ago)
         .order("date", desc=False)
@@ -411,7 +411,7 @@ async def get_radars(request: Request, response: Response):
             thirty_days_ago = (now - timedelta(days=30)).strftime("%Y-%m-%d")
             hist_res = (
                 client.table("radar_history")
-                .select("*")
+                .select("radar_id, date, aura_score")
                 .in_("radar_id", list(radar_id_to_slug.keys()))
                 .gte("date", thirty_days_ago)
                 .order("date", desc=False)

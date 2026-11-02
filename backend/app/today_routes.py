@@ -248,25 +248,12 @@ async def get_today_plays(
 
 async def calculate_today_plays(days: int, strategy: str = "aura_score", limit: int = 100) -> TodayPlaysResponse:
     """Core logic to calculate today's plays from database."""
-    client = _get_client()
     now = datetime.now(timezone.utc)
     start_date = (now - timedelta(days=days)).isoformat()
 
-    # Query all recommendations (all-time) with pagination to calculate both Omni (all-time) and Aura (30d) scores
-    all_raw_recs = []
-    page_size = 1000
-    for i in range(20):
-        res = (
-            client.table("recommendations")
-            .select("ticker, stock_name, sentiment, sentiment_score, conviction_level, conviction_score, target_price, catalyst_notes, videos!inner(youtube_video_id, published_at, channels(channel_name, trust_weight))")
-            .range(i * page_size, (i + 1) * page_size - 1)
-            .execute()
-        )
-        if not res.data:
-            break
-        all_raw_recs.extend(res.data)
-        if len(res.data) < page_size:
-            break
+    # Query all recommendations (all-time) via the shared scan to calculate both Omni (all-time) and Aura (30d) scores
+    from app.recs_scan import get_shared_recommendations
+    all_raw_recs = await get_shared_recommendations()
         
     # Group recommendations by ticker
     ticker_groups: Dict[str, List[Dict[str, Any]]] = {}

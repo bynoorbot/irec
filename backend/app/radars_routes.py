@@ -121,27 +121,13 @@ async def get_radar_plays_data() -> dict:
             return cached_data["payload"]
 
     # Cache miss or stale -> fetch minimal data from database
-    from app.database import _get_client
-    client = _get_client()
     days = 30
     now = datetime.now(timezone.utc)
     start_date = (now - timedelta(days=days)).isoformat()
 
-    # Fetch recommendations with minimal fields for all time with pagination
-    all_raw_recs = []
-    page_size = 1000
-    for i in range(20):
-        res = (
-            client.table("recommendations")
-            .select("ticker, target_price, sentiment, sentiment_score, conviction_level, conviction_score, catalyst_notes, videos!inner(published_at, channels!inner(channel_name, trust_weight))")
-            .range(i * page_size, (i + 1) * page_size - 1)
-            .execute()
-        )
-        if not res.data:
-            break
-        all_raw_recs.extend(res.data)
-        if len(res.data) < page_size:
-            break
+    # Fetch recommendations with minimal fields for all time via the shared scan
+    from app.recs_scan import get_shared_recommendations
+    all_raw_recs = await get_shared_recommendations()
 
     # Group by ticker
     ticker_groups: Dict[str, List[Dict[str, Any]]] = {}

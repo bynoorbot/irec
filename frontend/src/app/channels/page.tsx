@@ -2,40 +2,14 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
 import Loading from '@/components/ui/loading'
-import { conviction100, normalizeAvgConviction100 } from '@/lib/utils'
+import { normalizeAvgConviction100 } from '@/lib/utils'
 import { ConvictionMini } from '@/components/TickerRow'
 import {
   Search, LayoutGrid, List, ChevronRight
 } from 'lucide-react'
 
 // ─── Types ───
-
-interface ChannelData {
-  channel_id: string
-  channel_name: string
-  trust_weight: number
-  created_at: string
-  channel_thumbnail_url: string | null
-  youtube_channel_id: string | null
-}
-
-interface VideoData {
-  video_id: string
-  channel_id: string
-  youtube_video_id: string
-  published_at: string
-}
-
-interface RecommendationData {
-  ticker: string
-  sentiment: number
-  conviction_level: number
-  conviction_score?: number | null
-  target_price: number | null
-  video_id: string
-}
 
 interface ChannelProfile {
   channel_id: string
@@ -73,105 +47,6 @@ const AVATAR_COLORS = [
 function getAvatarColor(channelId: string): string {
   const code = channelId.charCodeAt(0) + channelId.charCodeAt(channelId.length - 1)
   return AVATAR_COLORS[code % AVATAR_COLORS.length]
-}
-
-// ─── Build Profiles with Enhanced Intelligence ───
-
-function buildProfiles(
-  channels: ChannelData[],
-  videos: VideoData[],
-  recommendations: RecommendationData[]
-): ChannelProfile[] {
-  const videosByChannel = new Map<string, VideoData[]>()
-  for (const v of videos) {
-    const list = videosByChannel.get(v.channel_id) || []
-    list.push(v)
-    videosByChannel.set(v.channel_id, list)
-  }
-
-  const videoIdToChannel = new Map<string, string>()
-  for (const v of videos) {
-    videoIdToChannel.set(v.video_id, v.channel_id)
-  }
-
-  const recsByChannel = new Map<string, RecommendationData[]>()
-  for (const r of recommendations) {
-    const channelId = videoIdToChannel.get(r.video_id)
-    if (!channelId) continue
-    const list = recsByChannel.get(channelId) || []
-    list.push(r)
-    recsByChannel.set(channelId, list)
-  }
-
-  const now = Date.now()
-
-  return channels.map((ch) => {
-    const chVideos = videosByChannel.get(ch.channel_id) || []
-    const chRecs = recsByChannel.get(ch.channel_id) || []
-
-    const avgSentiment = chRecs.length > 0
-      ? chRecs.reduce((s, r) => s + r.sentiment, 0) / chRecs.length
-      : 0
-
-    const avgConviction = chRecs.length > 0
-      ? chRecs.reduce((s, r) => s + conviction100(r), 0) / chRecs.length
-      : 0
-
-    const bullish = chRecs.filter((r) => r.sentiment >= 1).length
-    const bearish = chRecs.filter((r) => r.sentiment <= -1).length
-    const total = chRecs.length || 1
-
-    // Top tickers by frequency and full covered set
-    const tickerCount = new Map<string, number>()
-    const allCovered = new Set<string>()
-    for (const r of chRecs) {
-      allCovered.add(r.ticker.toUpperCase())
-      tickerCount.set(r.ticker, (tickerCount.get(r.ticker) || 0) + 1)
-    }
-    const topTickers = [...tickerCount.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([t]) => t)
-
-    // Sort videos by date, get latest
-    const sortedVideos = chVideos.sort(
-      (a, b) => new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
-    )
-    const latestVideo = sortedVideos[0] || null
-
-    // Recency score
-    const latestDate = latestVideo ? new Date(latestVideo.published_at).getTime() : 0
-    const daysSinceLatest = latestDate ? (now - latestDate) / (1000 * 60 * 60 * 24) : 999
-    let recencyScore = 0.1
-    if (daysSinceLatest <= 7) recencyScore = 1
-    else if (daysSinceLatest <= 30) recencyScore = 0.7
-    else if (daysSinceLatest <= 90) recencyScore = 0.4
-
-    // Importance score
-    const importance_score =
-      (chRecs.length * 0.4) +
-      (ch.trust_weight * 10 * 0.3) +
-      (recencyScore * 10 * 0.3)
-
-    return {
-      channel_id: ch.channel_id,
-      channel_name: ch.channel_name,
-      trust_weight: ch.trust_weight,
-      channel_thumbnail_url: ch.channel_thumbnail_url,
-      youtube_channel_id: ch.youtube_channel_id,
-      total_videos: chVideos.length,
-      total_recommendations: chRecs.length,
-      avg_sentiment: avgSentiment,
-      avg_conviction: avgConviction,
-      top_tickers: topTickers,
-      all_covered_tickers: allCovered,
-      latest_video_date: latestVideo?.published_at || null,
-      latest_video_youtube_id: latestVideo?.youtube_video_id || null,
-      bullish_pct: (bullish / total) * 100,
-      bearish_pct: (bearish / total) * 100,
-      importance_score,
-    }
-  }).sort((a, b) => b.importance_score - a.importance_score)
 }
 
 // ─── Helpers ───
@@ -389,62 +264,23 @@ export default function ChannelsPage() {
 
   useEffect(() => {
     async function fetchData() {
-      const supabase = createClient()
-
-      async function fetchAll<T>(
-        table: string,
-        selectStr: string,
-        orderBy?: { column: string; ascending: boolean }
-      ): Promise<T[]> {
-        const pageSize = 1000
-
-        function pageQuery(from: number, withCount = false) {
-          let query = supabase
-            .from(table)
-            .select(selectStr, withCount ? { count: 'exact' } : undefined)
-            .range(from, from + pageSize - 1)
-          if (orderBy) {
-            query = query.order(orderBy.column, { ascending: orderBy.ascending })
-          }
-          return query
-        }
-
-        const first = await pageQuery(0, true)
-        if (first.error) {
-          console.error(`Error fetching ${table}:`, first.error)
-          return []
-        }
-        const firstData = (first.data || []) as unknown as T[]
-        const total = first.count ?? firstData.length
-        if (firstData.length < pageSize || total <= pageSize) return firstData
-
-        // Fetch the remaining pages in parallel instead of one round-trip each.
-        const starts: number[] = []
-        for (let from = pageSize; from < total; from += pageSize) starts.push(from)
-        const rest = await Promise.all(starts.map((from) => pageQuery(from)))
-        let allData = [...firstData]
-        for (const page of rest) {
-          if (page.error) {
-            console.error(`Error fetching ${table}:`, page.error)
-            continue
-          }
-          allData = allData.concat((page.data || []) as unknown as T[])
-        }
-        return allData
+      try {
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+        const res = await fetch(`${backendUrl}/api/v1/channels/profiles`)
+        if (!res.ok) throw new Error(`Failed to fetch channel profiles (${res.status})`)
+        const data = await res.json()
+        // Server serializes the covered-ticker set as an array; restore the Set the UI expects.
+        setProfiles(
+          (data.profiles || []).map((p: Omit<ChannelProfile, 'all_covered_tickers'> & { all_covered_tickers: string[] }) => ({
+            ...p,
+            all_covered_tickers: new Set(p.all_covered_tickers || []),
+          }))
+        )
+      } catch (err) {
+        console.error('Error fetching channel profiles:', err)
+      } finally {
+        setLoading(false)
       }
-
-      const [channelsRes, videosRes, recsRes] = await Promise.all([
-        supabase.from('channels').select('channel_id, channel_name, trust_weight, created_at, channel_thumbnail_url, youtube_channel_id'),
-        fetchAll<VideoData>('videos', 'video_id, channel_id, youtube_video_id, published_at', { column: 'published_at', ascending: false }),
-        fetchAll<RecommendationData>('recommendations', 'ticker, sentiment, conviction_level, conviction_score, target_price, video_id', { column: 'video_id', ascending: true }),
-      ])
-
-      const channels = (channelsRes.data || []) as ChannelData[]
-      const videos = videosRes || []
-      const recs = recsRes || []
-
-      setProfiles(buildProfiles(channels, videos, recs))
-      setLoading(false)
     }
     fetchData()
   }, [])

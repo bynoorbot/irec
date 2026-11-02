@@ -2,27 +2,10 @@
 
 import { useEffect, useState, useMemo } from 'react'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
 import Loading from '@/components/ui/loading'
-import { conviction100, formatConviction } from '@/lib/utils'
+import { formatConviction } from '@/lib/utils'
 
 /* ─── Types ─── */
-
-interface VideoRow {
-  video_id: string
-  video_url: string
-  youtube_video_id: string
-  published_at: string
-  extracted_at: string
-  video_summary: string | null
-  title: string | null
-  duration: string | null
-  channel_id: string
-  channels: {
-    channel_name: string
-    trust_weight: number
-  }
-}
 
 interface RecommendationRow {
   id: string
@@ -128,48 +111,6 @@ interface EnrichedVideo {
   avg_sentiment: number
   avg_conviction: number
   pick_count: number
-}
-
-function enrichVideos(
-  videos: VideoRow[],
-  recommendations: RecommendationRow[]
-): EnrichedVideo[] {
-  const recsByVideo = new Map<string, RecommendationRow[]>()
-  for (const rec of recommendations) {
-    const list = recsByVideo.get(rec.video_id) || []
-    list.push(rec)
-    recsByVideo.set(rec.video_id, list)
-  }
-
-  return videos.map((v) => {
-    const recs = recsByVideo.get(v.video_id) || []
-    const avgSentiment =
-      recs.length > 0
-        ? recs.reduce((s, r) => s + r.sentiment, 0) / recs.length
-        : 0
-    const avgConviction =
-      recs.length > 0
-        ? recs.reduce((s, r) => s + conviction100(r), 0) / recs.length
-        : 0
-
-    return {
-      video_id: v.video_id,
-      video_url: v.video_url,
-      youtube_video_id: v.youtube_video_id,
-      published_at: v.published_at,
-      extracted_at: v.extracted_at,
-      video_summary: v.video_summary,
-      title: v.title,
-      duration: v.duration,
-      channel_id: v.channel_id,
-      channel_name: v.channels.channel_name,
-      trust_weight: v.channels.trust_weight,
-      recommendations: recs,
-      avg_sentiment: avgSentiment,
-      avg_conviction: avgConviction,
-      pick_count: recs.length,
-    }
-  })
 }
 
 /* ─── Aggregate Stats ─── */
@@ -589,76 +530,17 @@ export default function VideosPage() {
 
   useEffect(() => {
     async function fetchData() {
-      const supabase = createClient()
-
-      // Helper to fetch all pages of a query
-      async function fetchAll(
-        table: string,
-        selectStr: string,
-        orderBy?: { column: string; ascending: boolean }
-      ) {
-        const pageSize = 1000
-
-        function pageQuery(from: number, withCount = false) {
-          let query = supabase
-            .from(table)
-            .select(selectStr, withCount ? { count: 'exact' } : undefined)
-            .range(from, from + pageSize - 1)
-          if (orderBy) {
-            query = query.order(orderBy.column, { ascending: orderBy.ascending })
-          }
-          return query
-        }
-
-        const first = await pageQuery(0, true)
-        if (first.error) {
-          console.error(`Error fetching ${table}:`, first.error)
-          return []
-        }
-        const firstData: any[] = first.data || []
-        const total = first.count ?? firstData.length
-        if (firstData.length < pageSize || total <= pageSize) return firstData
-
-        // Fetch the remaining pages in parallel instead of one round-trip each.
-        const starts: number[] = []
-        for (let from = pageSize; from < total; from += pageSize) starts.push(from)
-        const rest = await Promise.all(starts.map((from) => pageQuery(from)))
-        let allData = [...firstData]
-        for (const page of rest) {
-          if (page.error) {
-            console.error(`Error fetching ${table}:`, page.error)
-            continue
-          }
-          allData = allData.concat(page.data || [])
-        }
-        return allData
+      try {
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'
+        const res = await fetch(`${backendUrl}/api/v1/videos/feed`)
+        if (!res.ok) throw new Error(`Failed to fetch videos feed (${res.status})`)
+        const data = await res.json()
+        setVideos((data.videos || []) as EnrichedVideo[])
+      } catch (err) {
+        console.error('Error fetching videos feed:', err)
+      } finally {
+        setLoading(false)
       }
-
-      const [videosRes, recsRes] = await Promise.all([
-        fetchAll(
-          'videos',
-          `
-            video_id,
-            video_url,
-            youtube_video_id,
-            published_at,
-            extracted_at,
-            video_summary,
-            title,
-            duration,
-            channel_id,
-            channels!inner(channel_name, trust_weight)
-          `,
-          { column: 'published_at', ascending: false }
-        ),
-        fetchAll('recommendations', 'id, video_id, ticker, stock_name, sentiment, target_price, conviction_level, conviction_score', { column: 'id', ascending: true })
-      ])
-
-      const vids = (videosRes || []) as unknown as VideoRow[]
-      const recs = (recsRes || []) as unknown as RecommendationRow[]
-
-      setVideos(enrichVideos(vids, recs))
-      setLoading(false)
     }
     fetchData()
   }, [])
